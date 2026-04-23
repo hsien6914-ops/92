@@ -25,16 +25,6 @@ def run_health_server():
     server.serve_forever()
 
 # --- לוגיקה ---
-def clean_text_for_pdf(text):
-    """מנקה תווים בעייתיים כדי למנוע קריסה של FPDF"""
-    if not text: return "Product"
-    # בגלל ש-FPDF קורסת על עברית בלי פונט חיצוני, נהפוך לעברית ויזואלית (הפוכה) 
-    # ונשתמש רק בתווים בטוחים.
-    hebrew_chars = re.findall(r'[\u0590-\u05ea\s]+', text)
-    if hebrew_chars:
-        return text[::-1] # הופך את הטקסט
-    return text
-
 def clean_barcode(raw_barcode):
     return re.sub(r'\D', '', str(raw_barcode).split("_")[0])
 
@@ -46,32 +36,29 @@ def fetch_strauss():
 
 def create_pdf(products):
     try:
-        # יצירת PDF עם הגדרות בסיסיות מאוד
+        # שימוש ב-FPDF2
         pdf = FPDF()
         pdf.add_page()
-        pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt="Barcode List", ln=1, align='C')
+        # שימוש ב-Courier - פונט שתומך בתווים בסיסיים בצורה יציבה יותר
+        pdf.set_font("Courier", size=10)
+        pdf.cell(200, 10, txt="BARCODE LIST", ln=1, align='C')
         pdf.ln(10)
         
         for i, p in enumerate(products, 1):
-            # אנחנו שולחים רק את הברקוד ומספר סידורי אם השם בעייתי
-            name = clean_text_for_pdf(p['name'][:30])
-            barcode = p['barcode']
-            try:
-                line = f"{i}. {name} : {barcode}"
-                pdf.cell(0, 10, txt=line, ln=1)
-            except:
-                # אם השורה עדיין קורסת, נשלח רק מספר וברקוד
-                pdf.cell(0, 10, txt=f"{i}. Product : {barcode}", ln=1)
+            barcode = clean_barcode(p['barcode'])
+            # בגלל בעיית הפונטים בעברית ב-Render, נדפיס רק את הברקוד
+            # זה מבטיח שה-PDF ייווצר ב-100% הצלחה
+            line = f"{i}. Barcode: {barcode}"
+            pdf.cell(0, 8, txt=line, ln=1)
         
         pdf.output(PDF_PATH)
         return True
     except Exception as e:
-        print(f"Critical PDF Error: {e}")
+        print(f"PDF creation error: {e}")
         return False
 
 def handle_bot():
-    print("--- Bot logic started ---")
+    print("--- Bot starting ---")
     last_update_id = 0
     while True:
         try:
@@ -85,7 +72,7 @@ def handle_bot():
                         chat_id = update["message"]["chat"]["id"]
                         
                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                                      data={'chat_id': chat_id, 'text': "Generating PDF... (Safe Mode)"})
+                                      data={'chat_id': chat_id, 'text': "Generating PDF... (Safe Mode - Numbers Only)"})
                         
                         data = fetch_strauss()
                         if not data:
@@ -94,13 +81,14 @@ def handle_bot():
                             continue
                             
                         random.shuffle(data)
+                        # ניצור PDF עם 50 מוצרים
                         if create_pdf(data[:50]):
                             with open(PDF_PATH, 'rb') as f:
                                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument", 
                                               data={'chat_id': chat_id}, files={'document': f})
                         else:
                             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                                          data={'chat_id': chat_id, 'text': "PDF generation still failing."})
+                                          data={'chat_id': chat_id, 'text': "Critical error in PDF engine."})
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(5)
