@@ -1,0 +1,30 @@
+{
+    "url": "https://cc.strauss-group.com/api/gifts/getGiftsPaginated",
+    "headers": {
+        "content-type": "application/json",
+        "deviceosversion": "26.4.1",
+        "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6Ijg1MTE1MSIsImh0dHA6Ly9taW50YXV0aC9jbGFpbXMvZ3VpZCI6ImY1YmMyZWFmLTMwMDgtNDhmMC04NjE2LTVmMGUzNDFkMTVkYiIsIm5iZiI6MTc3Njc4MzE4OSwiZXhwIjoxNzg0NTU5MTg5LCJpYXQiOjE3NzY3ODMxODl9.KkdAeYVHL2lP9ZiublQDOSyCH-8A2aTVNXam7nQ7SQY",
+        "accept": "*/*",
+        "appversion": "8.5.1",
+        "priority": "u=3, i",
+        "accesstoken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6Ijg1MTE1MSIsImh0dHA6Ly9taW50YXV0aC9jbGFpbXMvZ3VpZCI6ImY1YmMyZWFmLTMwMDgtNDhmMC04NjE2LTVmMGUzNDFkMTVkYiIsIm5iZiI6MTc3Njc4MzE4OSwiZXhwIjoxNzg0NTU5MTg5LCJpYXQiOjE3NzY3ODMxODl9.KkdAeYVHL2lP9ZiublQDOSyCH-8A2aTVNXam7nQ7SQY",
+        "fbaccesstoken": "",
+        "platform": "Application",
+        "accept-language": "he-IL;q=1",
+        "deviceid": "41E972E3-87CF-41DA-9E63-57851820BD66",
+        "user-agent": "Strauss/8.5.1 (iPhone; iOS 26.4.1; Scale/3.00)",
+        "content-length": "128",
+        "accept-encoding": "gzip, deflate, br",
+        "devicemodel": "iPhone18,2",
+        "cookie": "__cf_bm=huXUWLDxZqkM91t2aSITNV9Ic3jHjJbFPBtdcfYOMr8-1776886246.1098738-1.0.1.1-Cu.qLhvNi8NW1Bs49c5piLRJZKCmx.Jp4tnsgSpfqseWp7QBjiYJM4RvKcyfCPDoA7gcOeyfDS4MOT2WjWcm7BFOm6pNEkGh5XnvVc5G0xX9Ze.sD1MhJxcmNaN6KDBi, TS01985ac1=012284cfa2aa0634c356fe6c5efbf81131fa3461624f923850ef38e813b199b0f5aa2e77b6a34641533b44468ae1f34f07e160548a"
+    },
+    "payload": {
+        "requestPage": 0,
+        "pageSize": 15,
+        "minimumPoints": null,
+        "maximumPoints": null,
+        "categoryId": 1003,
+        "searchTerm": "",
+        "subCategoryId": null
+    }
+}
