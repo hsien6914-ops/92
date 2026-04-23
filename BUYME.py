@@ -2,119 +2,116 @@ import requests
 import json
 import time
 import os
-import sys
-import tkinter as tk
-from tkinter import font
-from bidi.algorithm import get_display  # 👈 הייבוא החדש לסידור העברית
+import re
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import random
 
-def show_huge_popup_and_exit(gift_name, stock):
-    # ... (הקוד של הפופאפ נשאר בדיוק אותו דבר) ...
-    """חלון מעוצב בטירוף שסוגר את הכל בסיום"""
-    root = tk.Tk()
-    root.title("🚨 התראת מלאי קריטית! 🚨")
+# --- הגדרות בוט טלגרם ---
+TELEGRAM_TOKEN = "8501576610:AAH3lheXjfPkWXjcfzPQjnbm-y66Nw3fuMQ"
+KEYS_FILE = "strauss_keys.json"
+STRAUSS_DATA = "strauss.txt"
+
+# --- שרת בריאות (Render) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot & Monitor are running")
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
+# --- פונקציות עזר לטלגרם ---
+def send_telegram_msg(chat_id, text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, data={'chat_id': chat_id, 'text': text})
+
+# --- לוגיקת סורק המלאי (Monitor) ---
+def run_stock_monitor(chat_id_to_alert):
+    """סורק מלאי ושולח התראה לטלגרם אם נמצא BUYME ALL"""
+    print("--- Stock Monitor Started ---")
     
-    root.attributes("-topmost", True)
-    window_width = 700
-    window_height = 400
-    
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-    center_x = int(screen_width/2 - window_width/2)
-    center_y = int(screen_height/2 - window_height/2)
-    root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
-    
-    root.configure(bg="#1a1a1a")
+    if not os.path.exists(KEYS_FILE):
+        print(f"Error: {KEYS_FILE} not found!")
+        return
 
-    header_f = font.Font(family="Segoe UI", size=36, weight="bold")
-    name_f = font.Font(family="Segoe UI", size=24)
-    stock_f = font.Font(family="Segoe UI", size=20, weight="bold")
-
-    tk.Label(root, text="🔥 BUYME ALL! 🔥", font=header_f, bg="#1a1a1a", fg="#00FF00", pady=20).pack()
-    
-    frame = tk.Frame(root, bg="#333333", padx=20, pady=20, highlightbackground="#00FF00", highlightthickness=2)
-    frame.pack(pady=10)
-
-    tk.Label(frame, text=f"מתנה: {gift_name}", font=name_f, bg="#333333", fg="white").pack()
-    tk.Label(frame, text=f"כמות במלאי: {stock}", font=stock_f, bg="#333333", fg="#FFD700").pack()
-
-    def final_exit():
-        root.destroy()
-        # 👈 עברית מסודרת ביציאה
-        print(get_display("\n👋 סוגר הכל... בהצלחה!")) 
-        os._exit(0)
-
-    exit_btn = tk.Button(
-        root, 
-        text="סגור והמשך לרכישה", 
-        command=final_exit, 
-        font=("Segoe UI", 16, "bold"), 
-        bg="#FF3131", 
-        fg="white", 
-        activebackground="#CC0000",
-        padx=40, 
-        pady=10,
-        cursor="hand2"
-    )
-    exit_btn.pack(pady=30)
-
-    root.protocol("WM_DELETE_WINDOW", final_exit)
-    root.mainloop()
-
-def run_auto_stock():
-    txt_filename = 'FINAL_STOCK_REPORT.txt'
     try:
-        if not os.path.exists("strauss_keys.json"):
-            # 👈 סידור עברית לשגיאה
-            print(get_display("❌ קובץ strauss_keys.json לא נמצא!"))
-            return
-
-        with open("strauss_keys.json", "r", encoding="utf-8") as f:
+        with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
         
         url = keys["url"]
         headers = keys["headers"]
         base_payload = keys.get("payload", {})
-        all_results = []
-        categories = [None, 1003, 1002, 1001, 1004, 1005] 
+        categories = [None, 1003, 1002, 1001, 1004, 1005]
         
-        # 👈 סידור עברית להודעת פתיחה
-        print(get_display("🔍 מחפש את היהלום... (BUYME ALL)"))
-
+        found_any = False
         for cat in categories:
             page = 0
             base_payload["categoryId"] = cat
-            while True:
+            while page < 5: # הגבלה ל-5 דפים למניעת לופ אינסופי
                 base_payload["requestPage"] = page
                 try:
-                    response = requests.post(url, headers=headers, json=base_payload, timeout=15)
+                    response = requests.post(url, headers=headers, json=base_payload, timeout=10)
                     if response.status_code != 200: break
                     data = response.json()
                     items = data.get('body', {}).get('gifts') or data.get('body', {}).get('items') or []
                     if not items: break
                     
                     for item in items:
-                        name = item.get('title') or item.get('name') or "מתנה"
+                        name = item.get('title') or item.get('name') or "Unknown"
                         stock = item.get('stockCount')
-                        stock_display = stock if stock is not None else "זמין"
                         
                         if "BUYME ALL" in name.upper():
-                            show_huge_popup_and_exit(name, stock_display)
-
-                        res_line = f"🎁 {name[:40]:<40} | מלאי: {str(stock_display):<7}"
-                        if res_line not in all_results:
-                            all_results.append(res_line)
-                            # 👈 סידור עברית לכל שורת מתנה
-                            print(get_display(res_line))
+                            alert_msg = f"🚨 התראת מלאי קריטית! 🚨\n\nמתנה: {name}\nמלאי: {stock if stock is not None else 'זמין'}\n\nרוץ לקנות!"
+                            send_telegram_msg(chat_id_to_alert, alert_msg)
+                            found_any = True
+                            return # עוצר אחרי מציאה
                     
                     page += 1
-                    time.sleep(0.3)
+                    time.sleep(0.5)
                 except: break
-
-        # 👈 סידור עברית לסיום הסריקה
-        print(get_display("\n✅ סבב סריקה הסתיים ללא BUYME."))
-
+        
+        if not found_any:
+            print("Scan finished - No BUYME ALL found.")
+            
     except Exception as e:
-        print(get_display(f"❌ תקלה: {e}"))
+        print(f"Monitor error: {e}")
+
+# --- לוגיקת הבוט הראשי (פקודות) ---
+def handle_bot():
+    last_id = 0
+    print("--- Bot is listening ---")
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_id + 1}&timeout=20"
+            res = requests.get(url, timeout=30).json()
+            if res.get("result"):
+                for update in res["result"]:
+                    last_id = update["update_id"]
+                    if "message" in update:
+                        chat_id = update["message"]["chat"]["id"]
+                        text = update["message"].get("text", "")
+
+                        if text == "/check":
+                            send_telegram_msg(chat_id, "מתחיל סריקת מלאי עבור BUYME ALL... 🔍")
+                            # מריץ את הסורק בשרשור נפרד כדי לא לתקוע את הבוט
+                            threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
+                        
+                        elif text == "OK":
+                            send_telegram_msg(chat_id, "הבוט חי וסורק המלאי מוכן! שלח /check לסריקה.")
+                        
+                        else:
+                            send_telegram_msg(chat_id, "שלח 'OK' לבדיקת חיים או /check לסריקת מלאי.")
+                            
+        except Exception as e:
+            print(f"Bot error: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
-    run_auto_stock()
+    # 1. שרת בריאות ל-Render
+    threading.Thread(target=run_health_server, daemon=True).start()
+    # 2. הרצת הבוט
+    handle_bot()
