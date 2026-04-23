@@ -5,8 +5,8 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# --- הגדרות ---
-TELEGRAM_TOKEN = "8501576610:AAH3lheXjfPkWXjcfzPQjnbm-y66Nw3fuMQ"
+# --- הגדרות חדשות ---
+TELEGRAM_TOKEN = "7538452733:AAE4MZLNJHX-afRgTbepyK3aQXT5zDHNlaU"
 KEYS_FILE = "strauss_keys.json"
 REPORT_PATH = "/tmp/full_stock_report.txt"
 
@@ -29,7 +29,6 @@ def send_telegram_msg(chat_id, text):
         pass
 
 def fetch_data_safely(url, headers, payload):
-    """מבצע בקשה ובודק שהתשובה אינה ריקה"""
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
         if res.status_code == 200:
@@ -41,7 +40,6 @@ def fetch_data_safely(url, headers, payload):
         return None
 
 def run_full_report(chat_id):
-    """פקודת /check2 - הפקת דוח מלא"""
     try:
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
@@ -57,7 +55,6 @@ def run_full_report(chat_id):
             for page in range(3):
                 payload["requestPage"] = page
                 body = fetch_data_safely(url, headers, payload)
-                
                 if not body: continue
                 
                 items = body.get('gifts') or body.get('items') or body.get('vouchers') or []
@@ -65,7 +62,7 @@ def run_full_report(chat_id):
                     name = item.get('title') or item.get('name') or "Unknown"
                     stock = item.get('stockCount')
                     all_gifts.append(f"🎁 {name} | מלאי: {stock if stock is not None else 'זמין'}")
-                time.sleep(0.3) # השהייה למניעת חסימה
+                time.sleep(0.3)
 
         if all_gifts:
             unique_list = sorted(list(set(all_gifts)))
@@ -78,16 +75,14 @@ def run_full_report(chat_id):
                               data={'chat_id': chat_id, 'caption': f"נמצאו {len(unique_list)} מתנות."}, 
                               files={'document': f})
         else:
-            send_telegram_msg(chat_id, "הסריקה הסתיימה ללא נתונים. השרת חסם את הבקשה.")
+            send_telegram_msg(chat_id, "הסריקה הסתיימה ללא נתונים.")
     except Exception as e:
         send_telegram_msg(chat_id, f"❌ תקלה בהפקת דוח: {e}")
 
 def run_stock_monitor(chat_id_to_alert):
-    """פקודת /check - חיפוש BUYME ALL"""
     try:
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
-        
         url, headers = keys.get("url"), keys.get("headers")
         payload = keys.get("payload", {})
         found = False
@@ -113,7 +108,7 @@ def run_stock_monitor(chat_id_to_alert):
         if not found:
             send_telegram_msg(chat_id_to_alert, "סריקה הושלמה: BUYME ALL לא נמצא. 🔍")
     except:
-        send_telegram_msg(chat_id_to_alert, "❌ תקלה בסריקה המהירה.")
+        send_telegram_msg(chat_id_to_alert, "❌ תקלה בסריקה.")
 
 def handle_bot():
     last_id = 0
@@ -135,7 +130,7 @@ def handle_bot():
                             send_telegram_msg(chat_id, "מפיק דוח מלאי מלא... 📄")
                             threading.Thread(target=run_full_report, args=(chat_id,)).start()
                         elif text.upper() == "OK":
-                            send_telegram_msg(chat_id, "הבוט פעיל!\n/check - חיפוש מהיר\n/check2 - דוח מלא")
+                            send_telegram_msg(chat_id, "הבוט הישראלי פעיל! 🇮🇱\n/check - חיפוש מהיר\n/check2 - דוח מלא")
         except:
             time.sleep(5)
 
