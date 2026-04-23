@@ -7,8 +7,8 @@ import time
 from datetime import datetime
 
 # --- פרטי הבוט ---
+# וודא שהטוקן הזה הוא בדיוק מה שקיבלת מה-BotFather
 TELEGRAM_TOKEN = "8501576610:AAH3lheXjfPkWXjcfzPQjnbm-y66Nw3fuMQ"
-MY_CHAT_ID = "642954716" 
 
 OUTPUT_FOLDER = "PDF_OUTPUTS"
 EXCLUDED_WORDS = ["זהבי", "מילקה", "לאבנה", "ממולאות", "כתר", "הארק", "וודקה", "ערק", "טילון", "מגנום", "ארטיק", "הקפא", "מגנו", "רחצה", "פיתות", "מחיר", "גלידת", "שוקובו", "גודיז", "בדלי", "קוסקוס", "הארץ"]
@@ -60,7 +60,6 @@ def fetch_by_keyword(keyword, limit):
 
 def get_extensive_data():
     global global_sent_barcodes
-    
     general_keywords = ["עלית", "שטראוס", "יד מרדכי", "מילקי", "אחלה", "יטבתה"]
     all_general = []
     for kw in general_keywords:
@@ -68,27 +67,22 @@ def get_extensive_data():
     
     random.shuffle(all_general)
     selected_general = all_general[:40]
-
     osem_products = fetch_by_keyword("אסם", 10)
     tnuva_products = fetch_by_keyword("תנובה", 5)
     mama_off_products = fetch_by_keyword("מאמא עוף", 5)
 
     final_list = selected_general + osem_products + tnuva_products + mama_off_products
-    
     for p in final_list:
         global_sent_barcodes.add(p['barcode'])
-        
     return final_list
 
 def create_shufersal_style_pdf(selected_products, filepath):
-    # הגדרת PDF ללא צורך בפונט חיצוני (Arial מובנה ב-FPDF)
     pdf = FPDF(unit='mm', format='A4')
     pdf.set_margins(10, 5, 10) 
     pdf.add_page()
     pdf.set_font('Arial', size=11)
     
     def fix(t): 
-        # היפוך טקסט לעברית כדי שיוצג נכון ב-PDF ללא פונט RTL
         return str(t)[::-1] if any("\u0590" <= c <= "\u05ea" for c in str(t)) else str(t)
 
     col_widths = [10, 110, 45, 20] 
@@ -103,7 +97,6 @@ def create_shufersal_style_pdf(selected_products, filepath):
     
     for idx, p in enumerate(selected_products, 1):
         pdf.cell(col_widths[0], row_height, str(idx), border=1, align='C')
-        # שם המוצר יהיה הפוך לקריאה נוחה
         pdf.cell(col_widths[1], row_height, fix(p['name'][:52]), border=1, align='R')
         pdf.cell(col_widths[2], row_height, str(p['barcode']), border=1, align='C')
         pdf.cell(col_widths[3], row_height, "1", border=1, align='C')
@@ -119,40 +112,39 @@ def process_and_send(chat_id):
     filename = f"barcodes_{timestamp}.pdf"
     filepath = os.path.join(OUTPUT_FOLDER, filename)
 
-    print(f"Generating PDF for chat ID: {chat_id}")
+    print(f"--- Action: Generating PDF for Chat ID {chat_id} ---")
     data = get_extensive_data()
     if data:
         create_shufersal_style_pdf(data, filepath)
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
         try:
             with open(filepath, 'rb') as file:
-                requests.post(send_url, data={'chat_id': chat_id}, files={'document': file})
-            print(f"PDF sent successfully!")
+                res = requests.post(send_url, data={'chat_id': chat_id}, files={'document': file})
+                print(f"--- Bot Response Status: {res.status_code} ---")
         except Exception as e:
-            print(f"Send Error: {e}")
+            print(f"--- Error sending PDF: {e} ---")
 
 def run_bot():
-    print("Bot is starting on Server...")
+    print("--- Bot is LIVE and checking for messages... ---")
     last_update_id = 0
     
-    # שליחה ראשונית למנהל לוודא ריצה
-    try:
-        process_and_send(MY_CHAT_ID)
-    except:
-        pass
-
     while True:
         try:
+            # בקשת עדכונים מטלגרם
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=20"
             response = requests.get(url, timeout=25).json()
+            
             if response.get('result'):
                 for update in response['result']:
                     last_update_id = update['update_id']
                     if 'message' in update:
-                        process_and_send(update['message']['chat']['id'])
+                        user_id = update['message']['chat']['id']
+                        user_text = update['message'].get('text', '(no text)')
+                        print(f"--- New Message from {user_id}: {user_text} ---")
+                        process_and_send(user_id)
         except Exception as e:
-            print(f"Polling error: {e}")
-            time.sleep(10)
+            print(f"--- Polling error: {e} ---")
+            time.sleep(5)
 
 if __name__ == '__main__':
     run_bot()
