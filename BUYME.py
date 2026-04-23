@@ -2,7 +2,6 @@ import requests
 import json
 import time
 import os
-import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -10,12 +9,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 TELEGRAM_TOKEN = "8501576610:AAH3lheXjfPkWXjcfzPQjnbm-y66Nw3fuMQ"
 KEYS_FILE = "strauss_keys.json"
 
-# שרת בריאות ל-Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Monitor is active")
+        self.wfile.write(b"Active")
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -38,32 +36,39 @@ def run_stock_monitor(chat_id_to_alert):
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
         
-        url = keys["url"]
-        headers = keys["headers"]
+        url = keys.get("url")
+        headers = keys.get("headers")
         base_payload = keys.get("payload", {})
-        categories = [None, 1003, 1002, 1001, 1004, 1005]
         
+        if not url or not headers:
+            send_telegram_msg(chat_id_to_alert, "❌ חסרים פרטים (URL/Headers) ב-JSON")
+            return
+
+        categories = [None, 1003, 1002, 1001, 1004, 1005]
         found = False
+
         for cat in categories:
             base_payload["categoryId"] = cat
-            for page in range(3):
+            for page in range(2): # סריקה מצומצמת לבדיקה
                 base_payload["requestPage"] = page
                 res = requests.post(url, headers=headers, json=base_payload, timeout=15)
                 
                 if res.status_code != 200:
-                    break
+                    continue
                 
                 data = res.json()
-                # בדיקה בטוחה שהנתונים קיימים לפני הגישה אליהם
-                body = data.get('body')
-                if not body:
-                    break
+                if not data or not isinstance(data, dict):
+                    continue
                 
-                items = body.get('gifts') or body.get('items') or []
-                if not items:
-                    break
+                body = data.get('body')
+                if not body or not isinstance(body, dict):
+                    continue
+                
+                # בדיקה של כמה שדות אפשריים שבהם המלאי יכול להופיע
+                items = body.get('gifts') or body.get('items') or body.get('vouchers') or []
                 
                 for item in items:
+                    if not isinstance(item, dict): continue
                     name = item.get('title') or item.get('name') or ""
                     stock = item.get('stockCount')
                     
@@ -75,14 +80,14 @@ def run_stock_monitor(chat_id_to_alert):
             if found: break
             
         if not found:
-            send_telegram_msg(chat_id_to_alert, "סריקה הושלמה: BUYME ALL לא נמצא כרגע. 🔍")
+            send_telegram_msg(chat_id_to_alert, "סריקה הושלמה: BUYME ALL לא נמצא. 🔍")
             
     except Exception as e:
-        send_telegram_msg(chat_id_to_alert, f"❌ תקלה בסריקה: {str(e)}")
+        send_telegram_msg(chat_id_to_alert, f"❌ תקלה בסריקה: שרת Strauss חסם את הגישה או החזיר תשובה ריקה.")
+        print(f"Detailed Error: {e}")
 
 def handle_bot():
     last_id = 0
-    print("Bot is LIVE...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_id + 1}&timeout=20"
@@ -95,10 +100,10 @@ def handle_bot():
                         text = update["message"].get("text", "")
 
                         if text == "/check":
-                            send_telegram_msg(chat_id, "מתחיל סריקה... ⏳")
+                            send_telegram_msg(chat_id, "מתחיל סריקה זהירה... ⏳")
                             threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
                         elif text.upper() == "OK":
-                            send_telegram_msg(chat_id, "הבוט פעיל! שלח /check לסריקה.")
+                            send_telegram_msg(chat_id, "הבוט פעיל וממתין לפקודת /check")
         except:
             time.sleep(5)
 
