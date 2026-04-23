@@ -10,12 +10,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 TELEGRAM_TOKEN = "8501576610:AAH3lheXjfPkWXjcfzPQjnbm-y66Nw3fuMQ"
 KEYS_FILE = "strauss_keys.json"
 
-# שרת בריאות חובה ל-Render כדי למנוע קריסה
+# שרת בריאות ל-Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Monitor is running")
+        self.wfile.write(b"Monitor is active")
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -30,9 +30,8 @@ def send_telegram_msg(chat_id, text):
         pass
 
 def run_stock_monitor(chat_id_to_alert):
-    """סורק מלאי ושולח התראה לטלגרם"""
     if not os.path.exists(KEYS_FILE):
-        send_telegram_msg(chat_id_to_alert, "❌ שגיאה: קובץ strauss_keys.json חסר ב-GitHub")
+        send_telegram_msg(chat_id_to_alert, "❌ קובץ strauss_keys.json חסר")
         return
 
     try:
@@ -47,14 +46,20 @@ def run_stock_monitor(chat_id_to_alert):
         found = False
         for cat in categories:
             base_payload["categoryId"] = cat
-            for page in range(3): # סריקה של 3 דפים ראשונים
+            for page in range(3):
                 base_payload["requestPage"] = page
                 res = requests.post(url, headers=headers, json=base_payload, timeout=15)
+                
                 if res.status_code != 200:
                     break
                 
                 data = res.json()
-                items = data.get('body', {}).get('gifts') or data.get('body', {}).get('items') or []
+                # בדיקה בטוחה שהנתונים קיימים לפני הגישה אליהם
+                body = data.get('body')
+                if not body:
+                    break
+                
+                items = body.get('gifts') or body.get('items') or []
                 if not items:
                     break
                 
@@ -66,18 +71,18 @@ def run_stock_monitor(chat_id_to_alert):
                         msg = f"🚨 נמצא מלאי! 🚨\nמתנה: {name}\nמלאי: {stock if stock is not None else 'זמין'}"
                         send_telegram_msg(chat_id_to_alert, msg)
                         found = True
-            if found:
-                break
+                if found: break
+            if found: break
             
         if not found:
-            send_telegram_msg(chat_id_to_alert, "סריקה הושלמה: BUYME ALL לא נמצא כרגע במלאי. 🔍")
+            send_telegram_msg(chat_id_to_alert, "סריקה הושלמה: BUYME ALL לא נמצא כרגע. 🔍")
             
     except Exception as e:
-        send_telegram_msg(chat_id_to_alert, f"❌ תקלה בסריקה: {e}")
+        send_telegram_msg(chat_id_to_alert, f"❌ תקלה בסריקה: {str(e)}")
 
 def handle_bot():
     last_id = 0
-    print("Bot is LIVE and waiting for commands...")
+    print("Bot is LIVE...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_id + 1}&timeout=20"
@@ -93,12 +98,10 @@ def handle_bot():
                             send_telegram_msg(chat_id, "מתחיל סריקה... ⏳")
                             threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
                         elif text.upper() == "OK":
-                            send_telegram_msg(chat_id, "הבוט חי! שלח /check כדי לסרוק מלאי.")
+                            send_telegram_msg(chat_id, "הבוט פעיל! שלח /check לסריקה.")
         except:
             time.sleep(5)
 
 if __name__ == "__main__":
-    # הפעלת שרת הבריאות
     threading.Thread(target=run_health_server, daemon=True).start()
-    # הרצת הבוט הראשי
     handle_bot()
