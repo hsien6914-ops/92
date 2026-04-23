@@ -5,10 +5,9 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# --- הגדרות חדשות ---
+# --- הגדרות ---
 TELEGRAM_TOKEN = "7538452733:AAE4MZLNJHX-afRgTbepyK3aQXT5zDHNlaU"
 KEYS_FILE = "strauss_keys.json"
-REPORT_PATH = "/tmp/full_stock_report.txt"
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -21,10 +20,11 @@ def run_health_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-def send_telegram_msg(chat_id, text):
+def send_telegram_html(chat_id, html_text):
+    """שליחת הודעה מעוצבת ב-HTML"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={'chat_id': chat_id, 'text': text}, timeout=10)
+        requests.post(url, data={'chat_id': chat_id, 'text': html_text, 'parse_mode': 'HTML'}, timeout=15)
     except:
         pass
 
@@ -40,6 +40,7 @@ def fetch_data_safely(url, headers, payload):
         return None
 
 def run_full_report(chat_id):
+    """פקודת /check2 - הודעה מעוצבת עם צבעים (אימוג'ים)"""
     try:
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
@@ -47,12 +48,12 @@ def run_full_report(chat_id):
         url, headers = keys.get("url"), keys.get("headers")
         payload = keys.get("payload", {})
         
-        all_gifts = []
+        all_gifts = {} # שימוש במילון למניעת כפילויות
         categories = [None, 1003, 1002, 1001, 1004, 1005]
 
         for cat in categories:
             payload["categoryId"] = cat
-            for page in range(3):
+            for page in range(2): # סריקה מהירה של 2 דפים לכל קטגוריה
                 payload["requestPage"] = page
                 body = fetch_data_safely(url, headers, payload)
                 if not body: continue
@@ -61,25 +62,35 @@ def run_full_report(chat_id):
                 for item in items:
                     name = item.get('title') or item.get('name') or "Unknown"
                     stock = item.get('stockCount')
-                    all_gifts.append(f"🎁 {name} | מלאי: {stock if stock is not None else 'זמין'}")
-                time.sleep(0.3)
+                    # שמירה לפי שם כדי למנוע כפילויות
+                    all_gifts[name] = stock
+                time.sleep(0.2)
 
         if all_gifts:
-            unique_list = sorted(list(set(all_gifts)))
-            with open(REPORT_PATH, "w", encoding="utf-8") as f:
-                f.write(f"--- דוח מלאי מלא ({time.strftime('%H:%M:%S')}) ---\n")
-                f.write("\n".join(unique_list))
+            msg = "<b>📋 דוח מלאי מעודכן:</b>\n\n"
+            for name, stock in all_gifts.items():
+                if stock is not None and stock > 0:
+                    # מוצר במלאי - ירוק
+                    msg += f"🟢 <b>{name}</b> (מלאי: {stock})\n"
+                elif stock is not None and stock == 0:
+                    # מוצר אזל - אדום ומחוק
+                    msg += f"🔴 <s>{name}</s> (אזל)\n"
+                else:
+                    # מוצר זמין (ללא כמות ספציפית)
+                    msg += f"🟢 <b>{name}</b> (זמין)\n"
             
-            with open(REPORT_PATH, "rb") as f:
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument", 
-                              data={'chat_id': chat_id, 'caption': f"נמצאו {len(unique_list)} מתנות."}, 
-                              files={'document': f})
+            # טלגרם מגבילה הודעה ל-4096 תווים, אם ההודעה ארוכה מדי נחתוך אותה
+            if len(msg) > 4000:
+                msg = msg[:3900] + "\n\n<i>...הרשימה ארוכה מדי, מוצג חלקית</i>"
+            
+            send_telegram_html(chat_id, msg)
         else:
-            send_telegram_msg(chat_id, "הסריקה הסתיימה ללא נתונים.")
+            send_telegram_html(chat_id, "❌ לא נמצאו נתונים בסריקה.")
     except Exception as e:
-        send_telegram_msg(chat_id, f"❌ תקלה בהפקת דוח: {e}")
+        send_telegram_html(chat_id, f"❌ תקלה בהפקת דוח: {e}")
 
 def run_stock_monitor(chat_id_to_alert):
+    """פקודת /check - חיפוש BUYME ALL"""
     try:
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
@@ -93,22 +104,21 @@ def run_stock_monitor(chat_id_to_alert):
                 payload["requestPage"] = page
                 body = fetch_data_safely(url, headers, payload)
                 if not body: continue
-                
                 items = body.get('gifts') or body.get('items') or []
                 for item in items:
                     name = (item.get('title') or item.get('name') or "").upper()
                     if "BUYME ALL" in name:
-                        msg = f"🚨 נמצא מלאי! 🚨\nמתנה: {item.get('title')}\nמלאי: {item.get('stockCount')}"
-                        send_telegram_msg(chat_id_to_alert, msg)
-                        found = True
-                        break
+                        stock = item.get('stockCount')
+                        msg = f"🔥 <b>נמצא מלאי ל-BUYME ALL!</b> 🔥\nכמות: {stock if stock is not None else 'זמין'}"
+                        send_telegram_html(chat_id_to_alert, msg)
+                        found = True; break
                 if found: break
             if found: break
         
         if not found:
-            send_telegram_msg(chat_id_to_alert, "סריקה הושלמה: BUYME ALL לא נמצא. 🔍")
+            send_telegram_html(chat_id_to_alert, "🔍 <b>סריקה הושלמה:</b> BUYME ALL לא נמצא.")
     except:
-        send_telegram_msg(chat_id_to_alert, "❌ תקלה בסריקה.")
+        send_telegram_html(chat_id_to_alert, "❌ תקלה בסריקה המהירה.")
 
 def handle_bot():
     last_id = 0
@@ -124,13 +134,13 @@ def handle_bot():
                         text = update["message"].get("text", "")
 
                         if text == "/check":
-                            send_telegram_msg(chat_id, "מחפש BUYME ALL... ⏳")
+                            send_telegram_html(chat_id, "⏳ מחפש BUYME ALL...")
                             threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
                         elif text == "/check2":
-                            send_telegram_msg(chat_id, "מפיק דוח מלאי מלא... 📄")
+                            send_telegram_html(chat_id, "📄 מנתח מלאי נוכחי...")
                             threading.Thread(target=run_full_report, args=(chat_id,)).start()
                         elif text.upper() == "OK":
-                            send_telegram_msg(chat_id, "הבוט הישראלי פעיל! 🇮🇱\n/check - חיפוש מהיר\n/check2 - דוח מלא")
+                            send_telegram_html(chat_id, "🤖 <b>הבוט הישראלי פעיל!</b>\n\n/check - חיפוש מהיר\n/check2 - דוח ויזואלי")
         except:
             time.sleep(5)
 
