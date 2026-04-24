@@ -12,7 +12,7 @@ KEYS_FILE = "strauss_keys.json"
 MY_CHAT_ID = "634863346" 
 
 # זמני ברירת מחדל (יוצגו ב-OK ויופעלו אוטומטית)
-SCHEDULED_TIMES = ["08:00", "11:41", "13:38, "13:35, "13:48, "13:48, "13:46, "13:50, "11:49"]
+SCHEDULED_TIMES = ["08:00", "11:41", "13:35", "13:38", "13:46", "13:48", "13:50", "11:49"]
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
