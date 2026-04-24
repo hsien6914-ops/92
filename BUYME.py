@@ -4,15 +4,17 @@ import time
 import os
 import threading
 from datetime import datetime
+import pytz  # pip install pytz
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # --- הגדרות ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "7538452733:AAE4MZLNJHX-afRgTbepyK3aQXT5zDHNlaU")
 KEYS_FILE = "strauss_keys.json"
 MY_CHAT_ID = "634863346" 
+ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
-# זמני התזמון (ניתן לשנות כאן בקלות)
-SCHEDULED_TIMES = ["08:00", "12:20", "12:40", "15:00", "08:10", "08:20"]
+# זמני התזמון
+SCHEDULED_TIMES = ["08:00", "08:10", "08:20", "12:20", "12:40", "15:00"]
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -25,22 +27,52 @@ def run_health_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-def send_telegram_html(chat_id, html_text):
+def send_telegram_html(chat_id, html_text, reply_markup=None):
+    """פונקציה משופרת לשליחת הודעות עם תמיכה בכפתורים"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    if len(html_text) > 4000:
-        for i in range(0, len(html_text), 4000):
-            part = html_text[i:i+4000]
-            requests.post(url, data={'chat_id': chat_id, 'text': part, 'parse_mode': 'HTML'}, timeout=15)
-    else:
-        requests.post(url, data={'chat_id': chat_id, 'text': html_text, 'parse_mode': 'HTML'}, timeout=15)
+    payload = {
+        'chat_id': chat_id,
+        'text': html_text,
+        'parse_mode': 'HTML'
+    }
+    if reply_markup:
+        payload['reply_markup'] = json.dumps(reply_markup)
+    
+    try:
+        requests.post(url, json=payload, timeout=15)
+    except Exception as e:
+        print(f"Error sending telegram: {e}")
+
+def send_menu(chat_id):
+    """שליחת תפריט הכפתורים למשתמש"""
+    current_time = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
+    sched_list = ", ".join(SCHEDULED_TIMES)
+    
+    menu_text = (
+        f"<b>🤖 הבוט פעיל ומחובר!</b>\n\n"
+        f"🕒 <b>שעת ישראל:</b> <code>{current_time}</code>\n"
+        f"📅 <b>תזמונים:</b> {sched_list}\n\n"
+        "בחר פקודה מהתפריט למטה:"
+    )
+    
+    # הגדרת הכפתורים
+    keyboard = {
+        "keyboard": [
+            [{"text": "/check"}, {"text": "/check2"}],
+            [{"text": "OK"}]
+        ],
+        "resize_keyboard": True, # גורם לכפתורים להיות קטנים ונוחים
+        "one_time_keyboard": False # המקלדת תישאר פתוחה
+    }
+    
+    send_telegram_html(chat_id, menu_text, reply_markup=keyboard)
 
 def fetch_data_safely(url, headers, payload):
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
         if res.status_code == 200:
             data = res.json()
-            if data and isinstance(data, dict):
-                return data.get('body', {})
+            return data.get('body', {})
         return None
     except:
         return None
@@ -61,23 +93,22 @@ def run_full_report(chat_id):
                 body = fetch_data_safely(url, headers, payload)
                 if not body: continue
                 items = body.get('gifts') or body.get('items') or body.get('vouchers') or []
-                if not items: break
                 for item in items:
                     name = item.get('title') or item.get('name') or "Unknown"
                     stock = item.get('stockCount')
                     all_gifts[name] = stock
-                time.sleep(0.3)
+                time.sleep(0.2)
 
         if all_gifts:
-            msg = "<b>📋 דוח מלאי מלא ומפורט:</b>\n\n"
+            msg = "<b>📋 דוח מלאי מלא:</b>\n\n"
             for name in sorted(all_gifts.keys()):
                 stock = all_gifts[name]
                 if stock is not None and stock > 0:
-                    msg += f"🟢 <b>{name}</b> (מלאי: {stock})\n"
+                    msg += f"🟢 <b>{name}</b> ({stock})\n"
                 elif stock == 0:
-                    msg += f"🔴 <s>{name}</s> (אזל)\n"
+                    msg += f"🔴 <s>{name}</s>\n"
                 else:
-                    msg += f"🟢 <b>{name}</b> (זמין)\n"
+                    msg += f"🟢 <b>{name}</b>\n"
             send_telegram_html(chat_id, msg)
     except Exception as e:
         send_telegram_html(chat_id, f"❌ תקלה: {e}")
@@ -98,7 +129,7 @@ def run_stock_monitor(chat_id_to_alert, silent_if_not_found=False):
                 for item in items:
                     name = (item.get('title') or item.get('name') or "").upper()
                     if "BUYME ALL" in name:
-                        send_telegram_html(chat_id_to_alert, f"🔥 נמצא מלאי ל-BUYME ALL! 🔥")
+                        send_telegram_html(chat_id_to_alert, "🔥 <b>נמצא מלאי ל-BUYME ALL!</b> 🔥")
                         found = True; break
                 if found: break
             if found: break
@@ -107,14 +138,14 @@ def run_stock_monitor(chat_id_to_alert, silent_if_not_found=False):
     except: pass
 
 def run_scheduler():
-    """מנגנון התזמון - בודק שעה בכל דקה"""
+    last_run_minute = -1
     while True:
-        now = datetime.now().strftime("%H:%M")
-        if now in SCHEDULED_TIMES:
-            # הרצה שקטה (silent_if_not_found=True) כדי לא להציף אם לא נמצא כלום בתזמון
+        now_dt = datetime.now(ISRAEL_TZ)
+        now_str = now_dt.strftime("%H:%M")
+        if now_str in SCHEDULED_TIMES and now_dt.minute != last_run_minute:
             threading.Thread(target=run_stock_monitor, args=(MY_CHAT_ID, True)).start()
-            time.sleep(61) # מניעת הרצה כפולה
-        time.sleep(30)
+            last_run_minute = now_dt.minute
+        time.sleep(20)
 
 def handle_bot():
     last_id = 0
@@ -130,24 +161,13 @@ def handle_bot():
                         text = update["message"].get("text", "")
 
                         if text == "/check":
-                            send_telegram_html(chat_id, "⏳ מחפש BUYME ALL...")
+                            send_telegram_html(chat_id, "⏳ בודק...")
                             threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
                         elif text == "/check2":
-                            send_telegram_html(chat_id, "📄 מתחיל סריקה עמוקה...")
+                            send_telegram_html(chat_id, "📄 סורק...")
                             threading.Thread(target=run_full_report, args=(chat_id,)).start()
-                        elif text.upper() == "OK":
-                            current_time = datetime.now().strftime("%H:%M:%S")
-                            sched_list = ", ".join(SCHEDULED_TIMES)
-                            menu_text = (
-                                f"<b>🤖 הבוט פעיל ומחובר!</b>\n\n"
-                                f"🕒 <b>שעת מערכת נוכחית:</b> <code>{current_time}</code>\n"
-                                f"📅 <b>תזמונים פעילים:</b> {sched_list}\n\n"
-                                "<b>פקודות זמינות:</b>\n"
-                                "🔍 <code>/check</code> - בדיקת BUYME ALL מהירה.\n"
-                                "📄 <code>/check2</code> - הפקת דוח מלאי מלא.\n\n"
-                                "<i>בהצלחה!</i>"
-                            )
-                            send_telegram_html(chat_id, menu_text)
+                        elif text.upper() == "OK" or text == "/start":
+                            send_menu(chat_id)
         except:
             time.sleep(5)
 
