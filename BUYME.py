@@ -7,14 +7,15 @@ from datetime import datetime
 import pytz
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# --- הגדרות ---
+# --- הגדרות בסיס ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "7538452733:AAE4MZLNJHX-afRgTbepyK3aQXT5zDHNlaU")
 KEYS_FILE = "strauss_keys.json"
 MY_CHAT_ID = "7811189125" 
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
-# רשימת זמנים דינמית (מתחילה עם ברירת המחדל שלך)
-SCHEDULED_TIMES = ["08:00", "12:20", "12:40", "14:15", "15:00", "20:00"]
+# --- ניהול זמנים ---
+SYSTEM_TIMES = ["08:00", "12:00", "20:00", "00:00"] # זמנים קבועים בקוד
+manual_times = [] # זמנים שאתה תוסיף ידנית
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -27,33 +28,54 @@ def run_health_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
+# --- פונקציות עזר לטלגרם ---
 def send_telegram(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
-    if reply_markup:
-        payload['reply_markup'] = json.dumps(reply_markup)
-    try:
-        requests.post(url, json=payload, timeout=15)
+    if reply_markup: payload['reply_markup'] = json.dumps(reply_markup)
+    try: requests.post(url, json=payload, timeout=15)
     except: pass
 
 def get_main_menu():
-    """יוצר את תפריט הכפתורים הראשי (Inline)"""
     return {
         "inline_keyboard": [
-            [
-                {"text": "🔍 בדיקה מהירה", "callback_data": "run_check"},
-                {"text": "📄 דוח מלאי מלא", "callback_data": "run_report"}
-            ],
-            [
-                {"text": "⏰ ניהול זמנים", "callback_data": "manage_times"},
-                {"text": "❓ הסבר פקודות", "callback_data": "show_help"}
-            ],
-            [
-                {"text": "🔄 רענן סטטוס", "callback_data": "refresh_status"}
-            ]
+            [{"text": "🔍 בדיקה מהירה", "callback_data": "run_check"}, {"text": "📄 דוח מלאי", "callback_data": "run_report"}],
+            [{"text": "⏰ ניהול זמנים", "callback_data": "manage_times"}, {"text": "❓ עזרה", "callback_data": "show_help"}],
+            [{"text": "🔄 רענן סטטוס", "callback_data": "refresh_status"}]
         ]
     }
 
+# --- לוגיקת הוספת זמנים ---
+def add_manual_time(chat_id, time_str):
+    """פונקציה חדשה להוספת זמן עם בדיקות תקינות"""
+    try:
+        # בדיקה אם הפורמט תקין (HH:MM)
+        time.strptime(time_str, '%H:%M')
+        
+        if time_str in SYSTEM_TIMES or time_str in manual_times:
+            send_telegram(chat_id, f"⚠️ הזמן <b>{time_str}</b> כבר קיים במערכת.")
+        else:
+            manual_times.append(time_str)
+            manual_times.sort()
+            send_telegram(chat_id, f"✅ הזמן <b>{time_str}</b> נוסף לרשימה הידנית!")
+    except ValueError:
+        send_telegram(chat_id, "❌ פורמט זמן לא תקין. נא לשלוח בצורה הבאה: <code>add 14:30</code>")
+
+def get_times_status():
+    """מפיק הודעה מעוצבת של כל הזמנים"""
+    sys_list = ", ".join(SYSTEM_TIMES) if SYSTEM_TIMES else "אין"
+    man_list = ", ".join(manual_times) if manual_times else "אין זמנים ידניים"
+    
+    text = (
+        "⏰ <b>פירוט זמני סריקה:</b>\n\n"
+        f"📌 <b>זמני מערכת (קבוע):</b>\n<code>{sys_list}</code>\n\n"
+        f"✏️ <b>זמנים ידניים:</b>\n<code>{man_list}</code>\n\n"
+        " כדי להוסיף: <code>add HH:MM</code> (למשל add 19:00)\n"
+        " כדי למחוק הכל: לחץ על הכפתור למטה."
+    )
+    return text
+
+# --- סורק ודוחות ---
 def fetch_data_safely(url, headers, payload):
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
@@ -78,14 +100,9 @@ def run_stock_monitor(chat_id, silent=False):
             if found: break
         if not found and not silent:
             send_telegram(chat_id, "🔍 סריקה הושלמה: לא נמצא BUYME ALL.")
-    except: pass
+    except: send_telegram(chat_id, "❌ שגיאה בחיבור לשרת.")
 
-def run_full_report(chat_id):
-    send_telegram(chat_id, "📄 מפיק דוח... זה עשוי לקחת כמה שניות.")
-    # (כאן תבוא הלוגיקה של ה-Full Report שכבר יש לך)
-    # לצורך הקיצור, נפעיל את הפונקציה המקורית שלך...
-    pass
-
+# --- טיפול בעדכונים ---
 def handle_updates():
     last_id = 0
     while True:
@@ -97,7 +114,7 @@ def handle_updates():
             for update in res["result"]:
                 last_id = update["update_id"]
                 
-                # טיפול בלחיצות על כפתורי Inline
+                # כפתורי Inline
                 if "callback_query" in update:
                     cq = update["callback_query"]
                     chat_id = cq["message"]["chat"]["id"]
@@ -105,52 +122,43 @@ def handle_updates():
                     
                     if data == "run_check":
                         threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
-                    elif data == "run_report":
-                        send_telegram(chat_id, "📄 מפיק דוח מלא...")
-                        # קריאה לפונקציית הדו"ח המלא שלך
-                    elif data == "show_help":
-                        help_text = (
-                            "📖 <b>הסבר על הפקודות:</b>\n\n"
-                            "🔍 <b>בדיקה מהירה:</b> סורק רק את BUYME ALL בקטגוריות הראשיות.\n"
-                            "📄 <b>דוח מלאי:</b> סריקה עמוקה של כל המתנות הקיימות (יותר זמן).\n"
-                            "⏰ <b>ניהול זמנים:</b> ניתן להוסיף זמני סריקה אוטומטיים.\n"
-                            "➕ <b>איך מוסיפים זמן?</b> פשוט שלח הודעה בפורמט: <code>add 16:30</code>"
-                        )
-                        send_telegram(chat_id, help_text)
                     elif data == "manage_times":
-                        times = ", ".join(SCHEDULED_TIMES)
-                        send_telegram(chat_id, f"⏰ <b>זמני סריקה נוכחיים:</b>\n{times}\n\nלהוספה שלח: <code>add HH:MM</code>")
+                        markup = {"inline_keyboard": [[{"text": "🗑️ מחק זמנים ידניים", "callback_data": "clear_manual"}]]}
+                        send_telegram(chat_id, get_times_status(), reply_markup=markup)
+                    elif data == "clear_manual":
+                        manual_times.clear()
+                        send_telegram(chat_id, "🗑️ כל הזמנים הידניים נמחקו.")
+                    elif data == "show_help":
+                        send_telegram(chat_id, "💡 <b>עזרה:</b>\nשליחת <code>add 15:00</code> תוסיף זמן סריקה.\nהכפתורים למטה יפעילו סריקות מיידיות.")
                     elif data == "refresh_status":
                         now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
-                        send_telegram(chat_id, f"✅ הבוט מחובר.\n🕒 שעה: {now}", reply_markup=get_main_menu())
+                        send_telegram(chat_id, f"✅ בוט פעיל\n🕒 שעה: {now}", reply_markup=get_main_menu())
 
-                # טיפול בהודעות טקסט
+                # הודעות טקסט
                 if "message" in update and "text" in update["message"]:
                     chat_id = update["message"]["chat"]["id"]
-                    text = update["message"]["text"].lower()
+                    text = update["message"]["text"].strip().lower()
 
-                    if text == "/start" or text == "ok":
-                        send_telegram(chat_id, "👋 ברוך הבא לבוט המלאי המשודרג!", reply_markup=get_main_menu())
-                    
+                    if text in ["/start", "ok"]:
+                        send_telegram(chat_id, "🤖 ברוך הבא למערכת הסריקה!", reply_markup=get_main_menu())
                     elif text.startswith("add "):
-                        new_time = text.replace("add ", "").strip()
-                        if len(new_time) == 5 and ":" in new_time:
-                            SCHEDULED_TIMES.append(new_time)
-                            SCHEDULED_TIMES.sort()
-                            send_telegram(chat_id, f"✅ הזמן <b>{new_time}</b> נוסף בהצלחה!")
-                        else:
-                            send_telegram(chat_id, "❌ פורמט לא תקין. השתמש ב: add 14:00")
+                        t_val = text.replace("add ", "").strip()
+                        add_manual_time(chat_id, t_val)
 
         except: time.sleep(5)
 
+# --- המתזמן ---
 def run_scheduler():
     last_min = -1
     while True:
         now = datetime.now(ISRAEL_TZ)
         now_str = now.strftime("%H:%M")
-        if now_str in SCHEDULED_TIMES and now.minute != last_min:
+        # בדיקה בשתי הרשימות
+        all_times = SYSTEM_TIMES + manual_times
+        
+        if now_str in all_times and now.minute != last_min:
             last_min = now.minute
-            send_telegram(MY_CHAT_ID, f"🕒 <b>תזמון {now_str}:</b> מתחיל סריקה...")
+            send_telegram(MY_CHAT_ID, f"🕒 <b>סריקה מתוזמנת ({now_str}):</b>")
             threading.Thread(target=run_stock_monitor, args=(MY_CHAT_ID, False)).start()
         time.sleep(20)
 
