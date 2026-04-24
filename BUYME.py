@@ -14,8 +14,8 @@ MY_CHAT_ID = "7811189125"
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # --- ניהול זמנים ---
-SYSTEM_TIMES = ["08:00", "12:00", "20:00", "00:00"] # זמנים קבועים בקוד
-manual_times = [] # זמנים שאתה תוסיף ידנית
+SYSTEM_TIMES = ["08:00", "12:20", "12:40", "15:00"] # זמנים קבועים
+manual_times = [] # זמנים ידניים
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -36,46 +36,29 @@ def send_telegram(chat_id, text, reply_markup=None):
     try: requests.post(url, json=payload, timeout=15)
     except: pass
 
-def get_main_menu():
+def get_bottom_keyboard():
+    """יוצר את הכפתורים שיופיעו תמיד למטה במקום המקלדת"""
     return {
-        "inline_keyboard": [
-            [{"text": "🔍 בדיקה מהירה", "callback_data": "run_check"}, {"text": "📄 דוח מלאי", "callback_data": "run_report"}],
-            [{"text": "⏰ ניהול זמנים", "callback_data": "manage_times"}, {"text": "❓ עזרה", "callback_data": "show_help"}],
-            [{"text": "🔄 רענן סטטוס", "callback_data": "refresh_status"}]
-        ]
+        "keyboard": [
+            [{"text": "🔍 בדיקה מהירה"}, {"text": "📄 דוח מלאי"}],
+            [{"text": "⏰ ניהול זמנים"}, {"text": "❓ עזרה"}]
+        ],
+        "resize_keyboard": True,
+        "persistent": True # שומר שהמקלדת לא תיעלם
     }
 
-# --- לוגיקת הוספת זמנים ---
-def add_manual_time(chat_id, time_str):
-    """פונקציה חדשה להוספת זמן עם בדיקות תקינות"""
-    try:
-        # בדיקה אם הפורמט תקין (HH:MM)
-        time.strptime(time_str, '%H:%M')
-        
-        if time_str in SYSTEM_TIMES or time_str in manual_times:
-            send_telegram(chat_id, f"⚠️ הזמן <b>{time_str}</b> כבר קיים במערכת.")
-        else:
-            manual_times.append(time_str)
-            manual_times.sort()
-            send_telegram(chat_id, f"✅ הזמן <b>{time_str}</b> נוסף לרשימה הידנית!")
-    except ValueError:
-        send_telegram(chat_id, "❌ פורמט זמן לא תקין. נא לשלוח בצורה הבאה: <code>add 14:30</code>")
-
 def get_times_status():
-    """מפיק הודעה מעוצבת של כל הזמנים"""
     sys_list = ", ".join(SYSTEM_TIMES) if SYSTEM_TIMES else "אין"
     man_list = ", ".join(manual_times) if manual_times else "אין זמנים ידניים"
-    
     text = (
-        "⏰ <b>פירוט זמני סריקה:</b>\n\n"
-        f"📌 <b>זמני מערכת (קבוע):</b>\n<code>{sys_list}</code>\n\n"
-        f"✏️ <b>זמנים ידניים:</b>\n<code>{man_list}</code>\n\n"
-        " כדי להוסיף: <code>add HH:MM</code> (למשל add 19:00)\n"
-        " כדי למחוק הכל: לחץ על הכפתור למטה."
+        "⏰ <b>סטטוס זמני סריקה:</b>\n\n"
+        f"📌 <b>מערכת:</b> <code>{sys_list}</code>\n"
+        f"✏️ <b>ידני:</b> <code>{man_list}</code>\n\n"
+        "להוספה שלח הודעה: <code>add 14:30</code>"
     )
     return text
 
-# --- סורק ודוחות ---
+# --- לוגיקת סריקה ---
 def fetch_data_safely(url, headers, payload):
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
@@ -99,8 +82,8 @@ def run_stock_monitor(chat_id, silent=False):
                     found = True; break
             if found: break
         if not found and not silent:
-            send_telegram(chat_id, "🔍 סריקה הושלמה: לא נמצא BUYME ALL.")
-    except: send_telegram(chat_id, "❌ שגיאה בחיבור לשרת.")
+            send_telegram(chat_id, "🔍 לא נמצא BUYME ALL.")
+    except: send_telegram(chat_id, "❌ שגיאה בסריקה.")
 
 # --- טיפול בעדכונים ---
 def handle_updates():
@@ -113,49 +96,57 @@ def handle_updates():
             
             for update in res["result"]:
                 last_id = update["update_id"]
-                
-                # כפתורי Inline
-                if "callback_query" in update:
-                    cq = update["callback_query"]
-                    chat_id = cq["message"]["chat"]["id"]
-                    data = cq["data"]
-                    
-                    if data == "run_check":
-                        threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
-                    elif data == "manage_times":
-                        markup = {"inline_keyboard": [[{"text": "🗑️ מחק זמנים ידניים", "callback_data": "clear_manual"}]]}
-                        send_telegram(chat_id, get_times_status(), reply_markup=markup)
-                    elif data == "clear_manual":
-                        manual_times.clear()
-                        send_telegram(chat_id, "🗑️ כל הזמנים הידניים נמחקו.")
-                    elif data == "show_help":
-                        send_telegram(chat_id, "💡 <b>עזרה:</b>\nשליחת <code>add 15:00</code> תוסיף זמן סריקה.\nהכפתורים למטה יפעילו סריקות מיידיות.")
-                    elif data == "refresh_status":
-                        now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
-                        send_telegram(chat_id, f"✅ בוט פעיל\n🕒 שעה: {now}", reply_markup=get_main_menu())
-
-                # הודעות טקסט
                 if "message" in update and "text" in update["message"]:
                     chat_id = update["message"]["chat"]["id"]
-                    text = update["message"]["text"].strip().lower()
+                    text = update["message"]["text"]
 
-                    if text in ["/start", "ok"]:
-                        send_telegram(chat_id, "🤖 ברוך הבא למערכת הסריקה!", reply_markup=get_main_menu())
-                    elif text.startswith("add "):
-                        t_val = text.replace("add ", "").strip()
-                        add_manual_time(chat_id, t_val)
+                    if text in ["/start", "ok", "OK"]:
+                        send_telegram(chat_id, "🤖 המערכת מוכנה. השתמש בכפתורים למטה:", reply_markup=get_bottom_keyboard())
+                    
+                    elif text == "🔍 בדיקה מהירה":
+                        send_telegram(chat_id, "⏳ מבצע בדיקה מהירה...")
+                        threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
+                    
+                    elif text == "📄 דוח מלאי":
+                        send_telegram(chat_id, "📄 מפיק דוח מלאי... (פעולה זו לוקחת זמן)")
+                        # קריאה לפונקציית הדוח המלא שלך
+                        
+                    elif text == "⏰ ניהול זמנים":
+                        # כאן נשתמש בכפתור inline בתוך הצאט למחיקה
+                        markup = {"inline_keyboard": [[{"text": "🗑️ נקה זמנים ידניים", "callback_data": "clear_manual"}]]}
+                        send_telegram(chat_id, get_times_status(), reply_markup=markup)
+                    
+                    elif text == "❓ עזרה":
+                        send_telegram(chat_id, "💡 <b>עזרה:</b>\n\n1. השתמש בכפתורים למטה לבדיקה ידנית.\n2. להוספת זמן אוטומטי, כתוב הודעה: <code>add 15:00</code>")
+
+                    elif text.lower().startswith("add "):
+                        t_val = text.lower().replace("add ", "").strip()
+                        try:
+                            time.strptime(t_val, '%H:%M')
+                            if t_val not in manual_times:
+                                manual_times.append(t_val)
+                                manual_times.sort()
+                                send_telegram(chat_id, f"✅ הזמן <b>{t_val}</b> נוסף בהצלחה!")
+                            else:
+                                send_telegram(chat_id, "⚠️ הזמן כבר קיים.")
+                        except:
+                            send_telegram(chat_id, "❌ פורמט לא תקין. דוגמה: <code>add 14:00</code>")
+
+                # טיפול בלחיצה על "מחיקה" (Inline)
+                if "callback_query" in update:
+                    cq = update["callback_query"]
+                    if cq["data"] == "clear_manual":
+                        manual_times.clear()
+                        send_telegram(cq["message"]["chat"]["id"], "🗑️ הזמנים הידניים נמחקו.")
 
         except: time.sleep(5)
 
-# --- המתזמן ---
 def run_scheduler():
     last_min = -1
     while True:
         now = datetime.now(ISRAEL_TZ)
         now_str = now.strftime("%H:%M")
-        # בדיקה בשתי הרשימות
         all_times = SYSTEM_TIMES + manual_times
-        
         if now_str in all_times and now.minute != last_min:
             last_min = now.minute
             send_telegram(MY_CHAT_ID, f"🕒 <b>סריקה מתוזמנת ({now_str}):</b>")
