@@ -119,7 +119,7 @@ def run_scheduler():
         now = datetime.now().strftime("%H:%M")
         
         # הרצת /check בשעות שביקשת
-        if now == "08:00" or now == "11:48":
+        if now == "08:00" or now == "11:54":
             print(f"Scheduled task triggered at {now}")
             # מריץ את הבדיקה ב-Thread נפרד כדי לא לתקוע את הלופ
             threading.Thread(target=run_stock_monitor, args=(MY_CHAT_ID, False)).start()
