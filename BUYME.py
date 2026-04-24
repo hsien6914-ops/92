@@ -14,8 +14,8 @@ MY_CHAT_ID = "7811189125"
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # --- ניהול זמנים ---
-SYSTEM_TIMES = ["08:00", "12:20", "12:40", "15:00"] # זמנים קבועים
-manual_times = [] # זמנים ידניים
+SYSTEM_TIMES = ["08:00", "12:20", "12:40", "15:00"] 
+manual_times = [] 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -31,34 +31,28 @@ def run_health_server():
 # --- פונקציות עזר לטלגרם ---
 def send_telegram(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
-    if reply_markup: payload['reply_markup'] = json.dumps(reply_markup)
-    try: requests.post(url, json=payload, timeout=15)
-    except: pass
+    # חלוקת הודעות ארוכות (לדוח מלא)
+    if len(text) > 4000:
+        for i in range(0, len(text), 4000):
+            part = text[i:i+4000]
+            requests.post(url, json={'chat_id': chat_id, 'text': part, 'parse_mode': 'HTML'}, timeout=15)
+    else:
+        payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
+        if reply_markup: payload['reply_markup'] = json.dumps(reply_markup)
+        try: requests.post(url, json=payload, timeout=15)
+        except: pass
 
 def get_bottom_keyboard():
-    """יוצר את הכפתורים שיופיעו תמיד למטה במקום המקלדת"""
     return {
         "keyboard": [
             [{"text": "🔍 בדיקה מהירה"}, {"text": "📄 דוח מלאי"}],
             [{"text": "⏰ ניהול זמנים"}, {"text": "❓ עזרה"}]
         ],
         "resize_keyboard": True,
-        "persistent": True # שומר שהמקלדת לא תיעלם
+        "persistent": True
     }
 
-def get_times_status():
-    sys_list = ", ".join(SYSTEM_TIMES) if SYSTEM_TIMES else "אין"
-    man_list = ", ".join(manual_times) if manual_times else "אין זמנים ידניים"
-    text = (
-        "⏰ <b>סטטוס זמני סריקה:</b>\n\n"
-        f"📌 <b>מערכת:</b> <code>{sys_list}</code>\n"
-        f"✏️ <b>ידני:</b> <code>{man_list}</code>\n\n"
-        "להוספה שלח הודעה: <code>add 14:30</code>"
-    )
-    return text
-
-# --- לוגיקת סריקה ---
+# --- לוגיקת סריקה ודוחות ---
 def fetch_data_safely(url, headers, payload):
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
@@ -85,6 +79,39 @@ def run_stock_monitor(chat_id, silent=False):
             send_telegram(chat_id, "🔍 לא נמצא BUYME ALL.")
     except: send_telegram(chat_id, "❌ שגיאה בסריקה.")
 
+def run_full_report(chat_id):
+    """הפונקציה שהייתה חסרה - דוח מלאי מלא"""
+    try:
+        with open(KEYS_FILE, "r", encoding="utf-8") as f:
+            keys = json.load(f)
+        url, headers, payload = keys["url"], keys["headers"], keys.get("payload", {})
+        all_gifts = {}
+        categories = [None, 1003, 1002, 1001, 1004, 1005]
+        
+        for cat in categories:
+            payload["categoryId"] = cat
+            for page in range(4):
+                payload["requestPage"] = page
+                body = fetch_data_safely(url, headers, payload)
+                if not body: continue
+                items = body.get('gifts') or body.get('items') or body.get('vouchers') or []
+                if not items: break
+                for item in items:
+                    name = item.get('title') or item.get('name') or "Unknown"
+                    stock = item.get('stockCount')
+                    all_gifts[name] = stock
+                time.sleep(0.2)
+
+        if all_gifts:
+            msg = "<b>📋 דוח מלאי מפורט:</b>\n\n"
+            for name in sorted(all_gifts.keys()):
+                stock = all_gifts[name]
+                status = f"🟢 ({stock})" if stock and stock > 0 else "🔴 (אזל)"
+                msg += f"{status} <b>{name}</b>\n"
+            send_telegram(chat_id, msg)
+    except Exception as e:
+        send_telegram(chat_id, f"❌ שגיאה בהפקת הדוח: {e}")
+
 # --- טיפול בעדכונים ---
 def handle_updates():
     last_id = 0
@@ -101,38 +128,33 @@ def handle_updates():
                     text = update["message"]["text"]
 
                     if text in ["/start", "ok", "OK"]:
-                        send_telegram(chat_id, "🤖 המערכת מוכנה. השתמש בכפתורים למטה:", reply_markup=get_bottom_keyboard())
+                        send_telegram(chat_id, "🤖 המערכת מוכנה:", reply_markup=get_bottom_keyboard())
                     
-                    elif text == "🔍 בדיקה מהירה":
-                        send_telegram(chat_id, "⏳ מבצע בדיקה מהירה...")
+                    elif text == "🔍 בדיקה מהירה" or text == "/check":
+                        send_telegram(chat_id, "⏳ בודק BUYME ALL...")
                         threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
                     
-                    elif text == "📄 דוח מלאי":
-                        send_telegram(chat_id, "📄 מפיק דוח מלאי... (פעולה זו לוקחת זמן)")
-                        # קריאה לפונקציית הדוח המלא שלך
+                    elif text == "📄 דוח מלאי" or text == "/check2":
+                        send_telegram(chat_id, "📄 מתחיל סריקה עמוקה...")
+                        threading.Thread(target=run_full_report, args=(chat_id,)).start()
                         
                     elif text == "⏰ ניהול זמנים":
-                        # כאן נשתמש בכפתור inline בתוך הצאט למחיקה
-                        markup = {"inline_keyboard": [[{"text": "🗑️ נקה זמנים ידניים", "callback_data": "clear_manual"}]]}
-                        send_telegram(chat_id, get_times_status(), reply_markup=markup)
+                        sys_list = ", ".join(SYSTEM_TIMES)
+                        man_list = ", ".join(manual_times) if manual_times else "אין"
+                        msg = f"⏰ <b>זמנים:</b>\n📌 מערכת: {sys_list}\n✏️ ידני: {man_list}"
+                        markup = {"inline_keyboard": [[{"text": "🗑️ נקה ידני", "callback_data": "clear_manual"}]]}
+                        send_telegram(chat_id, msg, reply_markup=markup)
                     
                     elif text == "❓ עזרה":
-                        send_telegram(chat_id, "💡 <b>עזרה:</b>\n\n1. השתמש בכפתורים למטה לבדיקה ידנית.\n2. להוספת זמן אוטומטי, כתוב הודעה: <code>add 15:00</code>")
+                        send_telegram(chat_id, "💡 <b>עזרה:</b>\nלהוספת זמן: <code>add 15:00</code>")
 
                     elif text.lower().startswith("add "):
                         t_val = text.lower().replace("add ", "").strip()
-                        try:
-                            time.strptime(t_val, '%H:%M')
-                            if t_val not in manual_times:
-                                manual_times.append(t_val)
-                                manual_times.sort()
-                                send_telegram(chat_id, f"✅ הזמן <b>{t_val}</b> נוסף בהצלחה!")
-                            else:
-                                send_telegram(chat_id, "⚠️ הזמן כבר קיים.")
-                        except:
-                            send_telegram(chat_id, "❌ פורמט לא תקין. דוגמה: <code>add 14:00</code>")
+                        if len(t_val) == 5 and ":" in t_val:
+                            manual_times.append(t_val)
+                            manual_times.sort()
+                            send_telegram(chat_id, f"✅ הזמן {t_val} נוסף.")
 
-                # טיפול בלחיצה על "מחיקה" (Inline)
                 if "callback_query" in update:
                     cq = update["callback_query"]
                     if cq["data"] == "clear_manual":
@@ -149,7 +171,7 @@ def run_scheduler():
         all_times = SYSTEM_TIMES + manual_times
         if now_str in all_times and now.minute != last_min:
             last_min = now.minute
-            send_telegram(MY_CHAT_ID, f"🕒 <b>סריקה מתוזמנת ({now_str}):</b>")
+            send_telegram(MY_CHAT_ID, f"🕒 <b>תזמון {now_str}:</b>")
             threading.Thread(target=run_stock_monitor, args=(MY_CHAT_ID, False)).start()
         time.sleep(20)
 
