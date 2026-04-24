@@ -3,7 +3,7 @@ import json
 import time
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -14,7 +14,7 @@ MY_CHAT_ID = "7811189125"
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # --- ניהול זמנים ---
-SYSTEM_TIMES = ["08:00", "12:20", "12:40", "15:00"] 
+SYSTEM_TIMES = ["08:00", "08:10", "08:20", "12:20", "12:40", "15:00"] 
 manual_times = [] 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -31,7 +31,6 @@ def run_health_server():
 # --- פונקציות עזר לטלגרם ---
 def send_telegram(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    # חלוקת הודעות ארוכות (לדוח מלא)
     if len(text) > 4000:
         for i in range(0, len(text), 4000):
             part = text[i:i+4000]
@@ -46,11 +45,40 @@ def get_bottom_keyboard():
     return {
         "keyboard": [
             [{"text": "🔍 בדיקה מהירה"}, {"text": "📄 דוח מלאי"}],
-            [{"text": "⏰ ניהול זמנים"}, {"text": "❓ עזרה"}]
+            [{"text": "⏰ ניהול זמנים"}, {"text": "🤖 סטטוס בוט"}],
+            [{"text": "❓ עזרה"}]
         ],
         "resize_keyboard": True,
         "persistent": True
     }
+
+def get_bot_status():
+    """מחשב ומחזיר את סטטוס הבוט בצורה מעוצבת"""
+    now = datetime.now(ISRAEL_TZ)
+    all_times = sorted(list(set(SYSTEM_TIMES + manual_times)))
+    
+    # חישוב הסריקה הבאה
+    next_scan = "לא מוגדר"
+    for t in all_times:
+        t_hour, t_min = map(int, t.split(':'))
+        scan_time = now.replace(hour=t_hour, minute=t_min, second=0, microsecond=0)
+        if scan_time > now:
+            diff = scan_time - now
+            minutes_left = int(diff.total_seconds() / 60)
+            next_scan = f"{t} (בעוד {minutes_left} דקות)"
+            break
+    
+    status_msg = (
+        "<b>🤖 סטטוס מערכת BUYME:</b>\n"
+        "----------------------------------\n"
+        f"✅ <b>סטטוס בוט:</b> פעיל (Render)\n"
+        f"🕒 <b>שעה נוכחית:</b> <code>{now.strftime('%H:%M:%S')}</code>\n"
+        f"📅 <b>תזמונים פעילים:</b> {', '.join(all_times)}\n"
+        f"⏳ <b>סריקה קרובה:</b> {next_scan}\n"
+        "----------------------------------\n"
+        "<i>הבוט בודק מלאי באופן אוטומטי.</i>"
+    )
+    return status_msg
 
 # --- לוגיקת סריקה ודוחות ---
 def fetch_data_safely(url, headers, payload):
@@ -80,15 +108,12 @@ def run_stock_monitor(chat_id, silent=False):
     except: send_telegram(chat_id, "❌ שגיאה בסריקה.")
 
 def run_full_report(chat_id):
-    """הפונקציה שהייתה חסרה - דוח מלאי מלא"""
     try:
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
         url, headers, payload = keys["url"], keys["headers"], keys.get("payload", {})
         all_gifts = {}
-        categories = [None, 1003, 1002, 1001, 1004, 1005]
-        
-        for cat in categories:
+        for cat in [None, 1003, 1002, 1001, 1004, 1005]:
             payload["categoryId"] = cat
             for page in range(4):
                 payload["requestPage"] = page
@@ -101,7 +126,6 @@ def run_full_report(chat_id):
                     stock = item.get('stockCount')
                     all_gifts[name] = stock
                 time.sleep(0.2)
-
         if all_gifts:
             msg = "<b>📋 דוח מלאי מפורט:</b>\n\n"
             for name in sorted(all_gifts.keys()):
@@ -110,7 +134,7 @@ def run_full_report(chat_id):
                 msg += f"{status} <b>{name}</b>\n"
             send_telegram(chat_id, msg)
     except Exception as e:
-        send_telegram(chat_id, f"❌ שגיאה בהפקת הדוח: {e}")
+        send_telegram(chat_id, f"❌ שגיאה: {e}")
 
 # --- טיפול בעדכונים ---
 def handle_updates():
@@ -128,32 +152,35 @@ def handle_updates():
                     text = update["message"]["text"]
 
                     if text in ["/start", "ok", "OK"]:
-                        send_telegram(chat_id, "🤖 המערכת מוכנה:", reply_markup=get_bottom_keyboard())
+                        send_telegram(chat_id, "🤖 מערכת BUYME מוכנה לעבודה:", reply_markup=get_bottom_keyboard())
                     
-                    elif text == "🔍 בדיקה מהירה" or text == "/check":
+                    elif text == "🔍 בדיקה מהירה":
                         send_telegram(chat_id, "⏳ בודק BUYME ALL...")
                         threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
                     
-                    elif text == "📄 דוח מלאי" or text == "/check2":
-                        send_telegram(chat_id, "📄 מתחיל סריקה עמוקה...")
+                    elif text == "📄 דוח מלאי":
+                        send_telegram(chat_id, "📄 מפיק דוח מלא... (המתן כמה שניות)")
                         threading.Thread(target=run_full_report, args=(chat_id,)).start()
+                        
+                    elif text == "🤖 סטטוס בוט":
+                        send_telegram(chat_id, get_bot_status())
                         
                     elif text == "⏰ ניהול זמנים":
                         sys_list = ", ".join(SYSTEM_TIMES)
                         man_list = ", ".join(manual_times) if manual_times else "אין"
-                        msg = f"⏰ <b>זמנים:</b>\n📌 מערכת: {sys_list}\n✏️ ידני: {man_list}"
-                        markup = {"inline_keyboard": [[{"text": "🗑️ נקה ידני", "callback_data": "clear_manual"}]]}
+                        msg = f"⏰ <b>זמני סריקה:</b>\n\n📌 <b>מערכת:</b> {sys_list}\n✏️ <b>ידני:</b> {man_list}"
+                        markup = {"inline_keyboard": [[{"text": "🗑️ נקה זמנים ידניים", "callback_data": "clear_manual"}]]}
                         send_telegram(chat_id, msg, reply_markup=markup)
                     
                     elif text == "❓ עזרה":
-                        send_telegram(chat_id, "💡 <b>עזרה:</b>\nלהוספת זמן: <code>add 15:00</code>")
+                        send_telegram(chat_id, "💡 <b>עזרה מהירה:</b>\n• השתמש בכפתורים לבדיקה ידנית.\n• להוספת זמן: <code>add 14:00</code>")
 
                     elif text.lower().startswith("add "):
                         t_val = text.lower().replace("add ", "").strip()
                         if len(t_val) == 5 and ":" in t_val:
                             manual_times.append(t_val)
                             manual_times.sort()
-                            send_telegram(chat_id, f"✅ הזמן {t_val} נוסף.")
+                            send_telegram(chat_id, f"✅ תזמון {t_val} נוסף בהצלחה.")
 
                 if "callback_query" in update:
                     cq = update["callback_query"]
