@@ -12,7 +12,7 @@ KEYS_FILE = "strauss_keys.json"
 MY_CHAT_ID = "634863346" 
 
 # זמני התזמון (ניתן לשנות כאן בקלות)
-SCHEDULED_TIMES = ["08:00", "11:48"]
+SCHEDULED_TIMES = ["08:00", "12:08"]
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -139,13 +139,13 @@ def handle_bot():
                             current_time = datetime.now().strftime("%H:%M:%S")
                             sched_list = ", ".join(SCHEDULED_TIMES)
                             menu_text = (
-                                f"<b>🤖 הבוט פעיל ומחובר ל-Render!</b>\n\n"
+                                f"<b>🤖 הבוט פעיל ומחובר!</b>\n\n"
                                 f"🕒 <b>שעת מערכת נוכחית:</b> <code>{current_time}</code>\n"
                                 f"📅 <b>תזמונים פעילים:</b> {sched_list}\n\n"
                                 "<b>פקודות זמינות:</b>\n"
                                 "🔍 <code>/check</code> - בדיקת BUYME ALL מהירה.\n"
                                 "📄 <code>/check2</code> - הפקת דוח מלאי מלא.\n\n"
-                                "<i>הערה: אם השעה למעלה לא תואמת לישראל, הגדר TZ ב-Render ל-Asia/Jerusalem.</i>"
+                                "<i>בהצלחה!</i>"
                             )
                             send_telegram_html(chat_id, menu_text)
         except:
