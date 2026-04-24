@@ -14,7 +14,7 @@ MY_CHAT_ID = "634863346"
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # זמני התזמון
-SCHEDULED_TIMES = ["08:00", "08:10", "08:20", "12:20", "12:40", "15:00"]
+SCHEDULED_TIMES = ["08:00", "08:10", "08:20", "12:20", "13:10", "13:00"]
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
