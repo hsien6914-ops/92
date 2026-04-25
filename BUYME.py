@@ -22,11 +22,29 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
         self.wfile.write(b"Active")
+        
+    # משתיק את הלוגים של שרת ה-HTTP כדי לא להציף את הטרמינל
+    def log_message(self, format, *args):
+        pass
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
+
+# --- מנגנון מניעת שינה (Keep Awake) ---
+def keep_awake():
+    """שולח פינג לכתובת ב-Render כל 10 דקות כדי למנוע הירדמות"""
+    url = "https://nine2-de7r.onrender.com/"
+    
+    while True:
+        try:
+            time.sleep(600) # ממתין 10 דקות (600 שניות)
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                print(f"[{datetime.now(ISRAEL_TZ).strftime('%H:%M:%S')}] ✅ פינג מניעת שינה נשלח בהצלחה")
+        except Exception as e:
+            print(f"❌ שגיאה במנגנון מניעת שינה: {e}")
 
 # --- פונקציות עזר לטלגרם ---
 def send_telegram(chat_id, text, reply_markup=None):
@@ -185,6 +203,14 @@ def run_scheduler():
         time.sleep(20)
 
 if __name__ == "__main__":
+    # הפעלת שרת הבריאות של Render
     threading.Thread(target=run_health_server, daemon=True).start()
+    
+    # הפעלת מנגנון מניעת השינה
+    threading.Thread(target=keep_awake, daemon=True).start()
+    
+    # הפעלת מנגנון התזמון של הסריקות
     threading.Thread(target=run_scheduler, daemon=True).start()
+    
+    # הפעלת קליטת הודעות מהטלגרם
     handle_updates()
