@@ -87,53 +87,105 @@ def get_bot_status():
 def fetch_data_safely(url, headers, payload):
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
-        return res.json().get('body', {}) if res.status_code == 200 else None
-    except: return None
+        if res.status_code != 200:
+            print(f"API Error {res.status_code}: {res.text}")
+            return None
+        return res.json().get('body', {})
+    except Exception as e: 
+        print(f"Request Error: {e}")
+        return None
+
+def get_all_items():
+    """פונקציה חכמה ששואבת את כל הפריטים מכל הקטגוריות והעמודים"""
+    try:
+        with open(KEYS_FILE, "r", encoding="utf-8") as f:
+            keys = json.load(f)
+        url, headers = keys["url"], keys["headers"]
+        base_payload = keys.get("payload", {})
+    except Exception as e:
+        print(f"Error loading keys: {e}")
+        return []
+
+    all_fetched_items = []
+    # קטגוריות לסריקה (None אומר כללי)
+    categories = [None, 1003, 1002, 1001, 1004, 1005]
+    
+    for cat in categories:
+        payload = base_payload.copy() # העתק כדי לא לדרוס את המקור
+        
+        # טיפול נכון בקטגוריה
+        if cat is not None:
+            payload["categoryId"] = cat
+        elif "categoryId" in payload:
+            del payload["categoryId"] # מונע שליחת null לשרת
+            
+        # ננסה להגדיל את כמות התוצאות (למקרה שה-API של שטראוס תומך)
+        payload["pageSize"] = 100 
+        payload["limit"] = 100
+        
+        # סריקה של עד 5 עמודים לכל קטגוריה
+        for page in range(0, 5): 
+            payload["requestPage"] = page
+            payload["page"] = page
+            
+            body = fetch_data_safely(url, headers, payload)
+            if not body: 
+                break # אם אין תשובה, עוברים לקטגוריה הבאה
+                
+            items = body.get('gifts') or body.get('items') or []
+            if not items:
+                break # הגענו לעמוד ריק, מסיימים עם הקטגוריה הזו
+                
+            all_fetched_items.extend(items)
+            time.sleep(0.2) # מנוחה קלה כדי לא לחטוף חסימה מהשרת
+            
+    return all_fetched_items
 
 def run_stock_monitor(chat_id, silent=False):
     try:
-        with open(KEYS_FILE, "r", encoding="utf-8") as f:
-            keys = json.load(f)
-        url, headers, payload = keys["url"], keys["headers"], keys.get("payload", {})
+        items = get_all_items()
         found = False
-        for cat in [None, 1003, 1002, 1001, 1004, 1005]:
-            payload["categoryId"] = cat
-            body = fetch_data_safely(url, headers, payload)
-            if not body: continue
-            items = body.get('gifts') or body.get('items') or []
-            for item in items:
-                if "BUYME ALL" in (item.get('title') or "").upper():
-                    send_telegram(chat_id, "🔥 <b>נמצא מלאי ל-BUYME ALL!</b> 🔥")
-                    found = True; break
-            if found: break
+        
+        for item in items:
+            name = (item.get('title') or item.get('name') or "").upper()
+            if "BUYME ALL" in name:
+                send_telegram(chat_id, "🔥 <b>נמצא מלאי ל-BUYME ALL!</b> 🔥")
+                found = True
+                break
+                
         if not found and not silent:
-            send_telegram(chat_id, "🔍 לא נמצא BUYME ALL.")
-    except: send_telegram(chat_id, "❌ שגיאה בסריקה.")
+            send_telegram(chat_id, f"🔍 סרקתי <b>{len(items)}</b> מתנות שונות בקטלוג.\nלא נמצא BUYME ALL כרגע.")
+    except Exception as e: 
+        print(e)
+        send_telegram(chat_id, "❌ שגיאה בסריקה.")
 
 def run_full_report(chat_id):
     try:
-        with open(KEYS_FILE, "r", encoding="utf-8") as f:
-            keys = json.load(f)
-        url, headers, payload = keys["url"], keys["headers"], keys.get("payload", {})
+        items = get_all_items()
         all_gifts = {}
-        for cat in [None, 1003, 1002, 1001, 1004, 1005]:
-            payload["categoryId"] = cat
-            for page in range(3):
-                payload["requestPage"] = page
-                body = fetch_data_safely(url, headers, payload)
-                if not body: continue
-                items = body.get('gifts') or body.get('items') or []
-                for item in items:
-                    name = item.get('title') or item.get('name') or "Unknown"
-                    all_gifts[name] = item.get('stockCount')
-                time.sleep(0.1)
         
-        msg = "<b>📋 דוח מלאי:</b>\n"
+        for item in items:
+            name = item.get('title') or item.get('name') or "Unknown"
+            all_gifts[name] = item.get('stockCount')
+            
+        if not all_gifts:
+            send_telegram(chat_id, "⚠️ לא נמצאו פריטים כלל. ייתכן שהטוקן של שטראוס פג תוקף!")
+            return
+            
+        msg = f"<b>📋 דוח מלאי (נסרקו {len(all_gifts)} פריטים שונים):</b>\n"
         for name in sorted(all_gifts.keys()):
             s = all_gifts[name]
             msg += f"{'🟢' if s and s > 0 else '🔴'} <b>{name}</b> ({s if s is not None else '?'})\n"
-        send_telegram(chat_id, msg)
-    except: send_telegram(chat_id, "❌ שגיאה בדוח.")
+            
+        # אם הדוח ארוך מדי (טלגרם מגביל ל-4096 תווים)
+        if len(msg) > 4000:
+            send_telegram(chat_id, msg[:4000] + "\n\n...[הדוח ארוך מדי ונחתך]...")
+        else:
+            send_telegram(chat_id, msg)
+            
+    except Exception as e: 
+        print(e)
+        send_telegram(chat_id, "❌ שגיאה בדוח. בדוק לוגים.")
 
 # --- טיפול בעדכונים ---
 def handle_updates():
