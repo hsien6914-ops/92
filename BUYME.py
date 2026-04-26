@@ -14,18 +14,17 @@ MY_CHAT_ID = "7811189125"
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # --- ניהול זמנים ומצבים ---
+# הוספת פיזור זמנים כדי לא להיראות כמו בוט קשיח
 SYSTEM_TIMES = ["08:00", "08:07", "08:15", "12:20", "12:40", "15:00"] 
 manual_times = [] 
 user_states = {}
 
-# --- שרת בריאות (Health Check) לשמירה על השרת פעיל ---
+# --- שרת בריאות לשמירה על השרת פעיל ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
         self.wfile.write(b"Active")
-        
-    def log_message(self, format, *args):
-        pass
+    def log_message(self, format, *args): pass
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -33,14 +32,12 @@ def run_health_server():
     server.serve_forever()
 
 def keep_awake():
-    # כתובת האפליקציה שלך ב-Render למניעת שינה
     url = "https://nine2-de7r.onrender.com/"
     while True:
         try:
             time.sleep(600)
             requests.get(url, timeout=10)
-        except:
-            pass
+        except: pass
 
 # --- פונקציות עזר לטלגרם ---
 def send_telegram(chat_id, text, reply_markup=None):
@@ -71,83 +68,67 @@ def get_bot_status():
             diff = scan_time - now
             next_scan = f"{t} (בעוד {int(diff.total_seconds() / 60)} דק')"
             break
-    
-    return (
-        f"<b>🤖 סטטוס מערכת:</b>\n"
-        f"🕒 שעה: <code>{now.strftime('%H:%M:%S')}</code>\n"
-        f"📅 תזמונים: {', '.join(all_times)}\n"
-        f"⏳ סריקה קרובה: <b>{next_scan}</b>"
-    )
+    return f"<b>🤖 סטטוס מערכת:</b>\n🕒 שעה: <code>{now.strftime('%H:%M:%S')}</code>\n📅 תזמונים: {', '.join(all_times)}\n⏳ סריקה קרובה: <b>{next_scan}</b>"
 
-# --- לוגיקת סריקה משולבת ואגרסיבית ---
-def fetch_data_safely(url, headers, payload):
-    # ניקוי כותרות שעלולות לחסום בקשות אוטומטיות
-    headers.pop("content-length", None)
-    headers.pop("accept-encoding", None)
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=15)
-        if res.status_code == 200:
-            return res.json().get('body', {})
-    except: 
-        return None
-    return None
-
+# --- לוגיקת סריקה משולבת ואגרסיבית (Anti-Ban) ---
 def get_all_items():
-    """שואבת את כל הפריטים בשיטה המשולבת (שמות ומלאי ישיר)"""
+    """סריקה מהירה ומאוחדת עם הגנה מחסימות"""
     try:
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
         url = keys["url"]
         headers = keys["headers"]
-        # וידוא שמתחילים מעמוד 0 או 1 בהתאם ל-JSON המקורי
+        # ניקוי כותרות קריטי למניעת חסימות
+        headers.pop("content-length", None)
+        headers.pop("accept-encoding", None)
         base_payload = keys.get("payload", {})
     except Exception as e:
         print(f"Error loading keys: {e}")
         return {}
 
     unique_items = {}
-    # קטגוריה 1000 היא המרכזית למתנות שוקולד/מארזים
-    categories = [None, 1000, 1003, 1002, 1001, 0]
+    # קטגוריות לסריקה (כולל None לחיפוש כללי)
+    categories = [None, 1000, 1001, 1002, 1003, 1004, 1005]
     
     for cat in categories:
-        for page in range(0, 8): # סריקת עד 8 עמודים לקטגוריה
+        for page in range(0, 8): 
+            # יצירת עותק נקי של ה-payload לכל בקשה
             payload = json.loads(json.dumps(base_payload))
-            
-            if cat is not None:
-                payload["categoryId"] = cat
-            
-            # עדכון עמודים בשיטה כפולה (למניעת אי-הבנה של השרת)
-            payload["page"] = page
+            if cat: payload["categoryId"] = cat
             payload["requestPage"] = page
-            
-            body = fetch_data_safely(url, headers, payload)
-            if not body: break
+            payload["page"] = page # תמיכה בגרסאות API שונות
+
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=15)
+                if res.status_code != 200: break
                 
-            # הלוגיקה המנצחת: בדיקה של gifts וגם items
-            items = body.get('gifts') or body.get('items') or []
-            if not items: break
+                body = res.json().get('body', {})
+                # חיפוש בשני המפתחות האפשריים (התיקון הקריטי)
+                items = body.get('gifts') or body.get('items') or []
                 
-            for item in items:
-                # חילוץ שם משופר (גם מתוך תת-אובייקט gift אם קיים)
-                title = item.get('title') or item.get('name')
-                if not title and item.get('gift'):
-                    title = item.get('gift', {}).get('title') or item.get('gift', {}).get('name')
+                if not items: break
                 
-                title = title or "Unknown Product"
+                for item in items:
+                    # חילוץ שם משופר
+                    title = item.get('title') or item.get('name')
+                    if not title and item.get('gift'):
+                        title = item.get('gift', {}).get('title')
+                    
+                    title = title or "מוצר ללא שם"
+                    
+                    # חילוץ מלאי ישיר מהקטלוג (מונע חסימות של ריבוי בקשות)
+                    stock = item.get('stockCount') or item.get('quantity')
+                    if stock is None and item.get('gift'):
+                        stock = item.get('gift', {}).get('stockCount')
+                    
+                    unique_items[title] = {
+                        "stock": stock,
+                        "points": item.get('points') or item.get('gift', {}).get('points', 0)
+                    }
                 
-                # חילוץ מלאי ישיר מהקטלוג (השדה שפיצחנו)
-                stock = item.get('stockCount') or item.get('quantity')
-                if stock is None and item.get('gift'):
-                    stock = item.get('gift', {}).get('stockCount') or item.get('gift', {}).get('quantity')
-                
-                # שמירה במילון (מונע כפילויות)
-                unique_items[title] = {
-                    "stock": stock,
-                    "points": item.get('points') or item.get('gift', {}).get('points', 0),
-                    "id": item.get('id')
-                }
-            
-            time.sleep(0.3)
+                # השהייה קצרה בין דפים כדי לא להיראות כמו התקפת DDOS
+                time.sleep(0.4)
+            except: break
             
     return unique_items
 
@@ -155,54 +136,37 @@ def run_stock_monitor(chat_id, silent=False):
     try:
         items_dict = get_all_items()
         found = False
-        
         for title, data in items_dict.items():
             name_upper = title.upper()
             stock = data.get('stock')
-            
-            # בדיקת BuyMe או כל פריט שיש לו מלאי חיובי (אופציונלי)
-            if "BUYME" in name_upper or "BUY ME" in name_upper or "ביימי" in name_upper:
+            if any(x in name_upper for x in ["BUYME", "BUY ME", "ביימי"]):
                 if stock is not None and stock > 0:
                     send_telegram(chat_id, f"🔥 <b>נמצא מלאי ל: {title}!</b> 🔥\nכמות: <code>{stock}</code>")
                     found = True
-                
         if not found and not silent:
-            send_telegram(chat_id, f"🔍 סריקה הושלמה (נסרקו <b>{len(items_dict)}</b> פריטים).\nלא נמצא BUYME במלאי כרגע.")
-    except Exception as e: 
-        send_telegram(chat_id, "❌ שגיאה בסריקה.")
+            send_telegram(chat_id, f"🔍 סריקה הושלמה (נסרקו <b>{len(items_dict)}</b> פריטים).\nלא נמצא BUYME כרגע.")
+    except: send_telegram(chat_id, "❌ שגיאה בסריקה.")
 
 def run_full_report(chat_id):
-    send_telegram(chat_id, "⏳ שואב דוח מלאי מפורט מכל הקטגוריות...")
+    send_telegram(chat_id, "⏳ מפיק דוח מלאי מהיר...")
     try:
         items_dict = get_all_items()
         if not items_dict:
-            send_telegram(chat_id, "⚠️ לא נמצאו פריטים. ייתכן והטוקן פג תוקף.")
-            return
+            send_telegram(chat_id, "⚠️ המערכת לא החזירה נתונים. רענן את הטוקן!"); return
             
-        msg = f"<b>📋 דוח מלאי ({len(items_dict)} פריטים):</b>\n"
-        # מיון לפי שם
+        msg = f"<b>📋 דוח מלאי סופי ({len(items_dict)} פריטים):</b>\n"
         for title in sorted(items_dict.keys()):
             data = items_dict[title]
-            s = data.get('stock')
-            pts = data.get('points')
-            
-            # עיצוב שורה: אימוג'י לפי מלאי
+            s, pts = data.get('stock'), data.get('points')
             icon = "🟢" if (s is not None and s > 0) else "🔴"
-            stock_str = s if s is not None else "?"
-            msg += f"{icon} <b>{title}</b> | מלאי: <code>{stock_str}</code> | נק': {pts}\n"
+            msg += f"{icon} <b>{title}</b> | מלאי: <code>{s if s is not None else '?'}</code> | נק': {pts}\n"
             
-            # פיצול הודעות ארוכות (טלגרם מגבילה ל-4096 תווים)
             if len(msg) > 3500:
-                send_telegram(chat_id, msg)
-                msg = ""
+                send_telegram(chat_id, msg); msg = ""
+        if msg: send_telegram(chat_id, msg)
+    except Exception as e: send_telegram(chat_id, f"❌ שגיאה: {e}")
 
-        if msg:
-            send_telegram(chat_id, msg)
-            
-    except Exception as e: 
-        send_telegram(chat_id, f"❌ שגיאה בהפקת דוח: {e}")
-
-# --- טיפול בעדכונים מטלגרם ---
+# --- טיפול בעדכונים ---
 def handle_updates():
     last_id = 0
     while True:
@@ -211,53 +175,37 @@ def handle_updates():
             res = requests.get(url, timeout=30).json()
             for update in res.get("result", []):
                 last_id = update["update_id"]
-                
                 if "message" in update and "text" in update["message"]:
-                    chat_id = update["message"]["chat"]["id"]
-                    text = update["message"]["text"].strip()
-
+                    chat_id, text = update["message"]["chat"]["id"], update["message"]["text"].strip()
                     if user_states.get(chat_id) == "add_time":
                         clean_time = text.replace(":", "")
                         if len(clean_time) == 4 and clean_time.isdigit():
                             new_t = f"{clean_time[:2]}:{clean_time[2:]}"
                             if new_t not in manual_times:
                                 manual_times.append(new_t); manual_times.sort()
-                                send_telegram(chat_id, f"✅ הזמן <b>{new_t}</b> נוסף לסריקות.")
-                            else: send_telegram(chat_id, "⚠️ קיים כבר.")
-                        else: send_telegram(chat_id, "❌ שלח 4 ספרות (למשל 1200).")
-                        user_states[chat_id] = None
-                        continue
-
-                    if text in ["/start", "ok", "OK", "היי"]:
-                        send_telegram(chat_id, "🤖 בוט שטראוס מוכן לעבודה!", reply_markup=get_bottom_keyboard())
-                    elif text == "🔍 בדיקה מהירה":
-                        threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
-                    elif text == "📄 דוח מלאי":
-                        threading.Thread(target=run_full_report, args=(chat_id,)).start()
-                    elif text == "🤖 סטטוס בוט":
-                        send_telegram(chat_id, get_bot_status())
+                                send_telegram(chat_id, f"✅ הזמן <b>{new_t}</b> נוסף.")
+                            else: send_telegram(chat_id, "⚠️ קיים.")
+                        else: send_telegram(chat_id, "❌ שלח 4 ספרות.")
+                        user_states[chat_id] = None; continue
+                    if text in ["/start", "ok", "היי"]:
+                        send_telegram(chat_id, "🤖 מערכת מוכנה:", reply_markup=get_bottom_keyboard())
+                    elif text == "🔍 בדיקה מהירה": threading.Thread(target=run_stock_monitor, args=(chat_id,)).start()
+                    elif text == "📄 דוח מלאי": threading.Thread(target=run_full_report, args=(chat_id,)).start()
+                    elif text == "🤖 סטטוס בוט": send_telegram(chat_id, get_bot_status())
                     elif text == "⏰ ניהול זמנים":
-                        msg = f"⏰ <b>זמני סריקה:</b>\n📌 מערכת: {', '.join(SYSTEM_TIMES)}\n✏️ ידני: {', '.join(manual_times) if manual_times else 'אין'}"
-                        markup = {"inline_keyboard": [
-                            [{"text": "➕ הוסף זמן", "callback_data": "start_add"}],
-                            [{"text": "🗑️ נקה ידני", "callback_data": "clear_man"}]
-                        ]}
+                        msg = f"⏰ <b>זמנים:</b>\n📌 מערכת: {', '.join(SYSTEM_TIMES)}\n✏️ ידני: {', '.join(manual_times)}"
+                        markup = {"inline_keyboard": [[{"text": "➕ הוסף זמן", "callback_data": "start_add"}], [{"text": "🗑️ נקה", "callback_data": "clear_man"}]]}
                         send_telegram(chat_id, msg, reply_markup=markup)
-                    elif text == "❓ עזרה":
-                        send_telegram(chat_id, "השתמש בכפתורים למטה לסריקת מלאי.\nבמידה ומופיע '?', הטוקן ב-JSON כנראה פג תוקף.")
-
+                    elif text == "❓ עזרה": send_telegram(chat_id, "לחץ על הכפתורים לסריקה.")
                 if "callback_query" in update:
                     cq = update["callback_query"]; chat_id = cq["message"]["chat"]["id"]
                     if cq["data"] == "start_add":
-                        user_states[chat_id] = "add_time"
-                        send_telegram(chat_id, "שלח את השעה (למשל 10:00):")
+                        user_states[chat_id] = "add_time"; send_telegram(chat_id, "שלח שעה (למשל 12:00):")
                     elif cq["data"] == "clear_man":
-                        manual_times.clear()
-                        send_telegram(chat_id, "🗑️ זמנים ידניים נמחקו.")
-
+                        manual_times.clear(); send_telegram(chat_id, "נמחק.")
         except: time.sleep(5)
 
-# --- מתזמן סריקות ---
+# --- מתזמן ---
 def run_scheduler():
     last_min = -1
     while True:
@@ -270,9 +218,7 @@ def run_scheduler():
         time.sleep(20)
 
 if __name__ == "__main__":
-    # הפעלת שירותי רקע
     threading.Thread(target=run_health_server, daemon=True).start()
     threading.Thread(target=keep_awake, daemon=True).start()
     threading.Thread(target=run_scheduler, daemon=True).start()
-    # הפעלת קבלת פקודות
     handle_updates()
