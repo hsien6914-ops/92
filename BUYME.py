@@ -16,14 +16,13 @@ ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 # --- ניהול זמנים ומצבים ---
 SYSTEM_TIMES = ["08:00", "08:10", "08:20", "12:20", "12:40", "15:00"] 
 manual_times = [] 
-user_states = {} # שומר מי נמצא במצב הוספת זמן
+user_states = {}
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
         self.wfile.write(b"Active")
         
-    # משתיק את הלוגים של שרת ה-HTTP כדי לא להציף את הטרמינל
     def log_message(self, format, *args):
         pass
 
@@ -32,19 +31,14 @@ def run_health_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# --- מנגנון מניעת שינה (Keep Awake) ---
 def keep_awake():
-    """שולח פינג לכתובת ב-Render כל 10 דקות כדי למנוע הירדמות"""
     url = "https://nine2-de7r.onrender.com/"
-    
     while True:
         try:
-            time.sleep(600) # ממתין 10 דקות (600 שניות)
-            res = requests.get(url, timeout=10)
-            if res.status_code == 200:
-                print(f"[{datetime.now(ISRAEL_TZ).strftime('%H:%M:%S')}] ✅ פינג מניעת שינה נשלח בהצלחה")
-        except Exception as e:
-            print(f"❌ שגיאה במנגנון מניעת שינה: {e}")
+            time.sleep(600)
+            requests.get(url, timeout=10)
+        except:
+            pass
 
 # --- פונקציות עזר לטלגרם ---
 def send_telegram(chat_id, text, reply_markup=None):
@@ -83,20 +77,18 @@ def get_bot_status():
         f"⏳ סריקה קרובה: <b>{next_scan}</b>"
     )
 
-# --- לוגיקת סריקה ---
+# --- לוגיקת סריקה חדשה ואגרסיבית ---
 def fetch_data_safely(url, headers, payload):
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
-        if res.status_code != 200:
-            print(f"API Error {res.status_code}: {res.text}")
-            return None
-        return res.json().get('body', {})
-    except Exception as e: 
-        print(f"Request Error: {e}")
+        if res.status_code == 200:
+            return res.json().get('body', {})
+    except: 
         return None
+    return None
 
 def get_all_items():
-    """פונקציה חכמה ששואבת את כל הפריטים מכל הקטגוריות והעמודים"""
+    """שואבת את כל הפריטים באופן יסודי, מסננת כפילויות ומחזירה מילון מאוחד"""
     try:
         with open(KEYS_FILE, "r", encoding="utf-8") as f:
             keys = json.load(f)
@@ -104,88 +96,81 @@ def get_all_items():
         base_payload = keys.get("payload", {})
     except Exception as e:
         print(f"Error loading keys: {e}")
-        return []
+        return {}
 
-    all_fetched_items = []
-    # קטגוריות לסריקה (None אומר כללי)
+    unique_items = {}
     categories = [None, 1003, 1002, 1001, 1004, 1005]
     
     for cat in categories:
-        payload = base_payload.copy() # העתק כדי לא לדרוס את המקור
-        
-        # טיפול נכון בקטגוריה
-        if cat is not None:
-            payload["categoryId"] = cat
-        elif "categoryId" in payload:
-            del payload["categoryId"] # מונע שליחת null לשרת
+        # סורק עד 10 עמודים בכל קטגוריה
+        for page in range(0, 10): 
+            # העתק עמוק של ה-payload כדי למנוע "זיהום" של נתונים בין בקשות
+            payload = json.loads(json.dumps(base_payload))
             
-        # ננסה להגדיל את כמות התוצאות (למקרה שה-API של שטראוס תומך)
-        payload["pageSize"] = 100 
-        payload["limit"] = 100
-        
-        # סריקה של עד 5 עמודים לכל קטגוריה
-        for page in range(0, 5): 
-            payload["requestPage"] = page
+            if cat is not None:
+                payload["categoryId"] = cat
+            elif "categoryId" in payload:
+                del payload["categoryId"]
+                
             payload["page"] = page
+            payload["requestPage"] = page
             
             body = fetch_data_safely(url, headers, payload)
             if not body: 
-                break # אם אין תשובה, עוברים לקטגוריה הבאה
+                break
                 
             items = body.get('gifts') or body.get('items') or []
             if not items:
-                break # הגענו לעמוד ריק, מסיימים עם הקטגוריה הזו
+                break # אם העמוד ריק, אין טעם להמשיך לעמוד הבא בקטגוריה הזו
                 
-            all_fetched_items.extend(items)
-            time.sleep(0.2) # מנוחה קלה כדי לא לחטוף חסימה מהשרת
+            # שמירה בתוך מילון כדי למנוע פריטים כפולים במערכת
+            for item in items:
+                title = item.get('title') or item.get('name') or "Unknown"
+                unique_items[title] = item
+                
+            time.sleep(0.3) # השהייה קלה למניעת חסימה
             
-    return all_fetched_items
+    return unique_items
 
 def run_stock_monitor(chat_id, silent=False):
     try:
-        items = get_all_items()
+        items_dict = get_all_items()
         found = False
         
-        for item in items:
-            name = (item.get('title') or item.get('name') or "").upper()
-            if "BUYME ALL" in name:
-                send_telegram(chat_id, "🔥 <b>נמצא מלאי ל-BUYME ALL!</b> 🔥")
+        for title, item_data in items_dict.items():
+            name_upper = title.upper()
+            # חיפוש רחב לכל וריאציה של ביימי
+            if "BUYME" in name_upper or "BUY ME" in name_upper or "ביימי" in name_upper:
+                send_telegram(chat_id, f"🔥 <b>נמצא מלאי ל: {title}!</b> 🔥")
                 found = True
-                break
                 
         if not found and not silent:
-            send_telegram(chat_id, f"🔍 סרקתי <b>{len(items)}</b> מתנות שונות בקטלוג.\nלא נמצא BUYME ALL כרגע.")
+            send_telegram(chat_id, f"🔍 סרקתי <b>{len(items_dict)}</b> מתנות שונות בקטלוג.\nלא נמצא BUYME כרגע.")
     except Exception as e: 
-        print(e)
         send_telegram(chat_id, "❌ שגיאה בסריקה.")
 
 def run_full_report(chat_id):
+    send_telegram(chat_id, "⏳ שואב נתונים מכל הקטגוריות... (זה עשוי לקחת כמה שניות)")
     try:
-        items = get_all_items()
-        all_gifts = {}
+        items_dict = get_all_items()
         
-        for item in items:
-            name = item.get('title') or item.get('name') or "Unknown"
-            all_gifts[name] = item.get('stockCount')
-            
-        if not all_gifts:
-            send_telegram(chat_id, "⚠️ לא נמצאו פריטים כלל. ייתכן שהטוקן של שטראוס פג תוקף!")
+        if not items_dict:
+            send_telegram(chat_id, "⚠️ לא נמצאו פריטים כלל. ייתכן שהטוקן של שטראוס פג תוקף! רענן את הקובץ.")
             return
             
-        msg = f"<b>📋 דוח מלאי (נסרקו {len(all_gifts)} פריטים שונים):</b>\n"
-        for name in sorted(all_gifts.keys()):
-            s = all_gifts[name]
-            msg += f"{'🟢' if s and s > 0 else '🔴'} <b>{name}</b> ({s if s is not None else '?'})\n"
+        msg = f"<b>📋 דוח מלאי (נסרקו {len(items_dict)} פריטים שונים):</b>\n"
+        for title in sorted(items_dict.keys()):
+            s = items_dict[title].get('stockCount')
+            msg += f"{'🟢' if s and s > 0 else '🔴'} <b>{title}</b> ({s if s is not None else '?'})\n"
             
-        # אם הדוח ארוך מדי (טלגרם מגביל ל-4096 תווים)
+        # פיצול הדוח אם הוא ארוך מדי עבור טלגרם
         if len(msg) > 4000:
-            send_telegram(chat_id, msg[:4000] + "\n\n...[הדוח ארוך מדי ונחתך]...")
+            send_telegram(chat_id, msg[:4000] + "\n\n...[הדוח ארוך מדי ונחתך, אבל הסריקה מלאה]...")
         else:
             send_telegram(chat_id, msg)
             
     except Exception as e: 
-        print(e)
-        send_telegram(chat_id, "❌ שגיאה בדוח. בדוק לוגים.")
+        send_telegram(chat_id, "❌ שגיאה בדוח.")
 
 # --- טיפול בעדכונים ---
 def handle_updates():
@@ -201,7 +186,6 @@ def handle_updates():
                     chat_id = update["message"]["chat"]["id"]
                     text = update["message"]["text"].strip()
 
-                    # מצב הוספת זמן
                     if user_states.get(chat_id) == "add_time":
                         clean_time = text.replace(":", "")
                         if len(clean_time) == 4 and clean_time.isdigit():
@@ -255,14 +239,7 @@ def run_scheduler():
         time.sleep(20)
 
 if __name__ == "__main__":
-    # הפעלת שרת הבריאות של Render
     threading.Thread(target=run_health_server, daemon=True).start()
-    
-    # הפעלת מנגנון מניעת השינה
     threading.Thread(target=keep_awake, daemon=True).start()
-    
-    # הפעלת מנגנון התזמון של הסריקות
     threading.Thread(target=run_scheduler, daemon=True).start()
-    
-    # הפעלת קליטת הודעות מהטלגרם
     handle_updates()
