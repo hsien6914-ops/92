@@ -14,7 +14,7 @@ MY_CHAT_ID = "7811189125"
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # --- ניהול זמנים ומצבים ---
-SYSTEM_TIMES = ["08:00", "08:10", "08:20", "12:20", "12:40", "15:00"] 
+SYSTEM_TIMES = ["08:00", "08:07", "08:15", "12:20", "12:40", "15:00"] 
 manual_times = [] 
 user_states = {}
 
