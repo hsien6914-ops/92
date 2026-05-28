@@ -13,7 +13,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 KEYS_FILE = "strauss_keys.json"
-MY_CHAT_ID = "7811189125"
 ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
 KEEP_ALIVE_URL = "https://ase-574b.onrender.com/"
 
@@ -21,7 +20,7 @@ if not TELEGRAM_TOKEN:
     print("Missing TELEGRAM_TOKEN")
     exit()
 
-SYSTEM_TIMES = ["00:00", "08:00", "08:01", "08:07", "08:11", "08:15", "11:00", "12:00", "15:00"]
+SYSTEM_TIMES = ["00:00", "08:00", "08:01", "08:07", "08:11", "08:15"]
 manual_times = []
 user_states = {}
 
@@ -34,9 +33,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Active")
-
-    def log_message(self, *args):
-        return
 
 def run_health_server():
     port = int(os.environ.get("PORT", 10000))
@@ -63,7 +59,6 @@ def send_telegram(chat_id, text, reply_markup=None):
         "parse_mode": "HTML"
     }
 
-    # ✅ FIX חשוב: בלי json.dumps
     if reply_markup:
         payload["reply_markup"] = reply_markup
 
@@ -90,18 +85,10 @@ def get_bot_status():
     now = datetime.now(ISRAEL_TZ)
     all_times = sorted(set(SYSTEM_TIMES + manual_times))
 
-    next_scan = "לא מוגדר"
-    for t in all_times:
-        h, m = map(int, t.split(":"))
-        if now.replace(hour=h, minute=m) > now:
-            next_scan = t
-            break
-
     return (
-        f"🤖 <b>סטטוס</b>\n"
+        f"🤖 <b>סטטוס מערכת</b>\n"
         f"🕒 {now.strftime('%H:%M:%S')}\n"
-        f"📅 {', '.join(all_times)}\n"
-        f"⏳ הבא: <b>{next_scan}</b>"
+        f"📅 זמנים: {', '.join(all_times)}"
     )
 
 # =========================
@@ -122,15 +109,14 @@ def get_all_items():
 
     result = {}
 
-    for cat in [None, 1000, 1001, 1002, 1003]:
-        for page in range(0, 6):
+    for cat in [None, 1000, 1001, 1002]:
+        for page in range(0, 5):
             payload = dict(base_payload)
 
             if cat:
                 payload["categoryId"] = cat
 
             payload["requestPage"] = page
-            payload["page"] = page
 
             try:
                 r = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -153,6 +139,61 @@ def get_all_items():
                 break
 
     return result
+
+# =========================
+# FORMAT HELPERS
+# =========================
+
+def stock_text(stock):
+    if stock is None:
+        return "לא במלאי"
+    if stock and stock > 0:
+        return f"במלאי ({stock})"
+    return "לא במלאי"
+
+def stock_icon(stock):
+    if stock and stock > 0:
+        return "🟢"
+    return "🔴"
+
+# =========================
+# MENU
+# =========================
+
+def main_menu(chat_id):
+    send_telegram(chat_id, "🤖 <b>תפריט ראשי</b>", {
+        "keyboard": [
+            [{"text": "📊 דשבורד"}],
+            [{"text": "🔍 בדיקה"}, {"text": "📄 דוח"}],
+            [{"text": "🔥 BUYME"}],
+            [{"text": "⏰ זמנים"}, {"text": "⚙️ הגדרות"}]
+        ],
+        "resize_keyboard": True
+    })
+
+# =========================
+# BUYME REPORT (CLEAN)
+# =========================
+
+def buyme_report(chat_id):
+    items = get_all_items()
+    buyme = {t: d for t, d in items.items() if "BUY" in t.upper()}
+
+    if not buyme:
+        send_telegram(chat_id, "לא נמצא BUYME")
+        return
+
+    msg = "🔥 <b>BUYME דוח מסודר</b>\n━━━━━━━━━━━━\n"
+
+    for t, d in sorted(buyme.items()):
+        icon = stock_icon(d["stock"])
+        status = stock_text(d["stock"])
+
+        points = d.get("points", 0)
+
+        msg += f"{icon} {t}\n📦 {status} | ⭐ {points}\n━━━━━━━━━━━━\n"
+
+    send_telegram(chat_id, msg)
 
 # =========================
 # HANDLER
@@ -179,90 +220,53 @@ def handle_updates():
                     chat_id = u["message"]["chat"]["id"]
                     text = u["message"]["text"].strip()
 
-                    # ADD TIME MODE
-                    if user_states.get(chat_id) == "add_time":
-                        if ":" in text and len(text) == 5:
-                            manual_times.append(text)
-                            manual_times.sort()
-                            send_telegram(chat_id, f"✅ נוסף: {text}")
-                        else:
-                            send_telegram(chat_id, "❌ פורמט HH:MM")
+                    if text in ["/start"]:
+                        main_menu(chat_id)
 
-                        user_states[chat_id] = None
-                        continue
-
-                    # MENU
-                    if text in ["/start", "היי", "ok"]:
-                        send_telegram(chat_id, "🤖 מוכן", {
-                            "keyboard": [
-                                [{"text": "🔍 בדיקה"}, {"text": "📄 דוח"}],
-                                [{"text": "🔥 דוח BUYME"}],
-                                [{"text": "⏰ זמנים"}, {"text": "🤖 סטטוס"}]
-                            ],
-                            "resize_keyboard": True
-                        })
+                    elif text == "📊 דשבורד":
+                        send_telegram(chat_id,
+                            "📊 <b>דשבורד</b>\n"
+                            "✔ בדיקות מלאי\n"
+                            "✔ דוחות בזמן אמת\n"
+                            "✔ BUYME מוצרים\n"
+                            "✔ ניהול זמנים"
+                        )
 
                     elif text == "🔍 בדיקה":
                         items = get_all_items()
-                        found = [
-                            f"{t} ({d['stock']})"
+                        res = [
+                            f"{stock_icon(d['stock'])} {t}"
                             for t, d in items.items()
                             if d["stock"] and d["stock"] > 0
                         ]
-                        send_telegram(chat_id, "\n".join(found) if found else "לא נמצא")
+                        send_telegram(chat_id, "\n".join(res) if res else "לא נמצא")
 
                     elif text == "📄 דוח":
                         items = get_all_items()
-
-                        msg = f"📋 <b>דוח מלאי</b>\n━━━━━━━━━━━━\n"
+                        msg = "📄 <b>דוח מלא</b>\n━━━━━━━━━━━━\n"
 
                         for t, d in sorted(items.items()):
-                            icon = "🟢" if d["stock"] else "🔴"
-                            msg += f"{icon} {t}\n📦 {d['stock']} | ⭐ {d['points']}\n━━━━━━━━━━━━\n"
+                            msg += f"{stock_icon(d['stock'])} {t}\n📦 {stock_text(d['stock'])}\n━━━━━━━━━━━━\n"
 
                         send_telegram(chat_id, msg)
 
-                    elif text == "🔥 דוח BUYME":
-                        items = get_all_items()
-                        buyme = {t: d for t, d in items.items() if "BUY" in t.upper()}
+                    elif text == "🔥 BUYME":
+                        buyme_report(chat_id)
 
-                        if not buyme:
-                            send_telegram(chat_id, "לא נמצא BUYME")
-                            continue
-
-                        msg = "🔥 <b>BUYME דוח</b>\n━━━━━━━━━━━━\n"
-
-                        for t, d in sorted(buyme.items()):
-                            icon = "🟢" if d["stock"] else "🔴"
-                            msg += f"{icon} {t}\n📦 {d['stock']}\n━━━━━━━━━━━━\n"
-
-                        send_telegram(chat_id, msg)
-
-                    elif text == "🤖 סטטוס":
-                        send_telegram(chat_id, get_bot_status())
+                    elif text == "⚙️ הגדרות":
+                        send_telegram(chat_id,
+                            "⚙️ מערכת פעילה\n✔ סריקות ON\n✔ דוחות ON"
+                        )
 
                     elif text == "⏰ זמנים":
-                        send_telegram(chat_id, "זמנים: " + (", ".join(manual_times) or "אין"), {
-                            "inline_keyboard": [
-                                [{"text": "➕ הוסף", "callback_data": "add"}],
-                                [{"text": "🗑 נקה", "callback_data": "clear"}]
-                            ]
-                        })
+                        send_telegram(chat_id,
+                            "⏰ זמני מערכת:\n" + (", ".join(manual_times) or "אין")
+                        )
 
                 # CALLBACK
                 elif "callback_query" in u:
                     cq = u["callback_query"]
-                    chat_id = cq["message"]["chat"]["id"]
-
                     answer_callback(cq["id"])
-
-                    if cq["data"] == "add":
-                        user_states[chat_id] = "add_time"
-                        send_telegram(chat_id, "שלח HH:MM")
-
-                    elif cq["data"] == "clear":
-                        manual_times.clear()
-                        send_telegram(chat_id, "נמחק")
 
         except Exception as e:
             print("error:", e)
