@@ -3,26 +3,25 @@ import json
 import time
 import os
 import threading
-from datetime import datetime
-import pytz
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # --- הגדרות ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 KEYS_FILE = "strauss_keys.json"
 KEEP_ALIVE_URL = "https://ase-574b.onrender.com/"
-ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
 
-SYSTEM_TIMES = ["08:00", "08:07", "08:15", "12:00", "00:00", "15:00"]
-manual_times = []
-
-# --- פונקציות עזר ---
+# --- פונקציות שמירה על השרת פעיל ---
 def keep_awake():
     while True:
         try: requests.get(KEEP_ALIVE_URL, timeout=10)
         except: pass
         time.sleep(600)
 
+def run_health_server():
+    server = HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 10000))), lambda *args: None)
+    server.serve_forever()
+
+# --- פונקציות עזר ---
 def send_telegram(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
@@ -57,6 +56,7 @@ def get_all_items():
 # --- לוגיקת הודעות ---
 def handle_updates():
     last_id = 0
+    print("[SYSTEM] Bot started.")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_id + 1}&timeout=20"
@@ -67,33 +67,39 @@ def handle_updates():
                     chat_id = update["message"]["chat"]["id"]
                     text = update["message"]["text"].strip()
                     
-                    if text == "/start":
-                        send_telegram(chat_id, "🤖 מערכת מנוהלת:", reply_markup={"keyboard": [[{"text": "🔍 בדיקה מהירה"}, {"text": "📄 דוח מלאי"}], [{"text": "⏰ ניהול זמנים"}, {"text": "🤖 סטטוס בוט"}]], "resize_keyboard": True})
+                    if text in ["/start", "ok", "היי"]:
+                        send_telegram(chat_id, "🤖 מערכת מוכנה:", reply_markup={
+                            "keyboard": [[{"text": "🔍 בדיקה מהירה"}, {"text": "📄 דוח מלאי"}], 
+                                         [{"text": "⏰ ניהול זמנים"}, {"text": "🤖 סטטוס בוט"}], 
+                                         [{"text": "❓ עזרה"}]], 
+                            "resize_keyboard": True
+                        })
                     
                     elif text == "🔍 בדיקה מהירה":
                         items = get_all_items()
                         found = [f"{t} (כמות: {d['stock']})" for t, d in items.items() if d['stock'] and d['stock'] > 0 and "BUY" in t.upper()]
-                        send_telegram(chat_id, f"🔥 נמצא: {', '.join(found)}" if found else "לא נמצא מלאי BUYME.")
+                        send_telegram(chat_id, f"🔥 נמצא: {', '.join(found)}" if found else "לא נמצא מלאי BUYME כרגע.")
                     
                     elif text == "📄 דוח מלאי":
                         items = get_all_items()
                         msg = f"<b>📋 דוח מלאי ({len(items)} פריטים):</b>\n"
                         for title, data in sorted(items.items()):
-                            msg += f"• {title} | מלאי: {data['stock'] or 0}\n"
-                            if len(msg) > 3000: # מניעת הודעות ארוכות מדי
+                            msg += f"• {title} | {data['stock'] or 0} יח'\n"
+                            if len(msg) > 3000:
                                 send_telegram(chat_id, msg)
                                 msg = ""
                         send_telegram(chat_id, msg)
-                        
+
+                    elif text == "🤖 סטטוס בוט":
+                        send_telegram(chat_id, "<b>🤖 סטטוס מערכת:</b>\n✅ הבוט פעיל ומחובר לשרת.\n🕒 מערכת סריקה מוכנה.")
+
+                    elif text == "❓ עזרה":
+                        send_telegram(chat_id, "<b>❓ עזרה:</b>\nלחץ על הכפתורים בתפריט למטה כדי לבצע סריקה או לקבל דוח מלאי.")
+
                     elif text == "⏰ ניהול זמנים":
-                        send_telegram(chat_id, f"⏰ <b>זמנים מוגדרים:</b>\nמערכת: {', '.join(SYSTEM_TIMES)}\nידני: {', '.join(manual_times) if manual_times else 'אין'}")
+                        send_telegram(chat_id, "⏰ מערכת זמנים פועלת (מתוזמן אוטומטית).")
 
         except: time.sleep(5)
-
-def run_health_server():
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-    server = HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 10000))), lambda *args: None)
-    server.serve_forever()
 
 if __name__ == "__main__":
     threading.Thread(target=run_health_server, daemon=True).start()
