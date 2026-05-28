@@ -63,13 +63,14 @@ def send_telegram(chat_id, text, reply_markup=None):
         "parse_mode": "HTML"
     }
 
+    # ✅ FIX חשוב: בלי json.dumps
     if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
+        payload["reply_markup"] = reply_markup
 
     try:
         requests.post(url, json=payload, timeout=15)
-    except:
-        pass
+    except Exception as e:
+        print("send error:", e)
 
 def answer_callback(cid):
     try:
@@ -201,7 +202,6 @@ def handle_updates():
                             "resize_keyboard": True
                         })
 
-                    # QUICK CHECK
                     elif text == "🔍 בדיקה":
                         items = get_all_items()
                         found = [
@@ -211,7 +211,6 @@ def handle_updates():
                         ]
                         send_telegram(chat_id, "\n".join(found) if found else "לא נמצא")
 
-                    # FULL REPORT
                     elif text == "📄 דוח":
                         items = get_all_items()
 
@@ -223,10 +222,8 @@ def handle_updates():
 
                         send_telegram(chat_id, msg)
 
-                    # BUYME REPORT
                     elif text == "🔥 דוח BUYME":
                         items = get_all_items()
-
                         buyme = {t: d for t, d in items.items() if "BUY" in t.upper()}
 
                         if not buyme:
