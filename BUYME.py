@@ -27,27 +27,30 @@ last_sent_dashboard = {}
 dashboard_enabled = True
 
 # =========================
-# MENUS
+# MENUS (REPLY KEYBOARD)
 # =========================
 
 def main_menu():
     return {
-        "inline_keyboard": [
-            [{"text": "🔥 בדוק BUYME עכשיו", "callback_data": "check_buyme"}],
-            [{"text": "📊 דוח מספרי קצר", "callback_data": "report"}, {"text": "📄 דוח מוצרים מפורט", "callback_data": "detailed_report"}],
-            [{"text": "⏰ ניהול זמנים", "callback_data": "times"}],
-            [{"text": f"📊 דשבורד אוטומטי: {'ON 🟢' if dashboard_enabled else 'OFF 🔴'}", "callback_data": "toggle_dashboard"}]
-        ]
+        "keyboard": [
+            [{"text": "🔥 בדוק BUYME עכשיו"}],
+            [{"text": "📊 דוח מספרי קצר"}, {"text": "📄 דוח מוצרים מפורט"}],
+            [{"text": "⏰ ניהול זמנים"}],
+            [{"text": f"📊 דשבורד אוטומטי: {'ON 🟢' if dashboard_enabled else 'OFF 🔴'}"}]
+        ],
+        "resize_keyboard": True,       # מתאים את גודל הכפתורים למסך
+        "one_time_keyboard": False     # משאיר את המקלדת פתוחה קבוע
     }
 
 def time_menu():
     return {
-        "inline_keyboard": [
-            [{"text": "➕ הוסף זמן", "callback_data": "add_time"}],
-            [{"text": "🗑 מחק זמן", "callback_data": "delete_time"}],
-            [{"text": "📋 רשימת זמנים", "callback_data": "list_times"}],
-            [{"text": "⬅️ חזרה לתפריט", "callback_data": "back_main"}]
-        ]
+        "keyboard": [
+            [{"text": "➕ הוסף זמן"}, {"text": "🗑 מחק זמן"}],
+            [{"text": "📋 רשימת זמנים"}],
+            [{"text": "⬅️ חזרה לתפריט הראשית"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": False
     }
 
 # =========================
@@ -66,28 +69,6 @@ def send_telegram(text, reply_markup=None):
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Error sending message: {e}")
-
-def edit_telegram(message_id, text, reply_markup=None):
-    if not TELEGRAM_TOKEN:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
-    payload = {"chat_id": MY_CHAT_ID, "message_id": message_id, "text": text, "parse_mode": "HTML"}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Error editing message: {e}")
-
-def answer_callback(callback_id, text=""):
-    if not TELEGRAM_TOKEN:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
-    payload = {"callback_query_id": callback_id, "text": text}
-    try:
-        requests.post(url, json=payload, timeout=5)
-    except:
-        pass
 
 # =========================
 # STRAUSS API
@@ -301,8 +282,9 @@ def monitor_schedules():
 
 def handle_updates():
     last_id = 0
+    global dashboard_enabled
     print("Background Thread: Telegram updater initialized.")
-    send_telegram("🚀 הבוט הופעל בהצלחה בשרת הענן!\nשלח /start לפתיחת התפריט.")
+    send_telegram("🚀 הבוט הופעל בהצלחה בענן! המקלדת זמינה למטה בתחתית המסך.", main_menu())
 
     while True:
         try:
@@ -324,12 +306,12 @@ def handle_updates():
             for u in data.get("result", []):
                 last_id = u["update_id"]
 
-                # 1. הודעות טקסט
                 if "message" in u and "text" in u["message"]:
                     text = u["message"]["text"].strip()
                     chat_id = str(u["message"]["chat"]["id"])
                     state = user_states.get(chat_id)
 
+                    # --- טיפול בקלט זמנים ידני (כשנמצאים בסטייט המתנה) ---
                     if state == "waiting_for_add_time":
                         if len(text) == 5 and ":" in text:
                             if text not in manual_times and text not in SYSTEM_TIMES:
@@ -340,7 +322,8 @@ def handle_updates():
                         else:
                             send_telegram("❌ פורמט שגוי. יש להקליד כגון 14:30")
                         user_states[chat_id] = None
-                        send_telegram("תפריט זמנים:", time_menu())
+                        send_telegram("חזרה לתפריט הזמנים:", time_menu())
+                        continue
 
                     elif state == "waiting_for_remove_time":
                         if text in manual_times:
@@ -349,61 +332,44 @@ def handle_updates():
                         else:
                             send_telegram("❌ הזמן לא נמצא ברשימה הידנית.")
                         user_states[chat_id] = None
-                        send_telegram("תפריט זמנים:", time_menu())
+                        send_telegram("חזרה לתפריט הזמנים:", time_menu())
+                        continue
 
-                    elif text in ["/start", "תפריט"]:
-                        user_states[chat_id] = None
-                        send_telegram("ברוך הבא למערכת הבקרה! בחר אפשרות:", main_menu())
+                    # --- טיפול בכפתורי המקלדת הראשיים ---
+                    if text == "🔥 בדוק BUYME עכשיו":
+                        send_telegram(check_buyme_now(), main_menu())
 
-                # 2. לחיצות כפתורים
-                elif "callback_query" in u:
-                    cq = u["callback_query"]
-                    cb_data = cq["data"]
-                    cb_id = cq["id"]
-                    msg_id = cq["message"]["message_id"]
-                    chat_id_cb = str(cq["message"]["chat"]["id"])
-
-                    if cb_data == "check_buyme":
-                        answer_callback(cb_id, "בודק מלאי...")
-                        send_telegram(check_buyme_now())
-
-                    elif cb_data == "report":
-                        answer_callback(cb_id, "מפיק דוח קצר...")
+                    elif text == "📊 דוח מספרי קצר":
                         send_dashboard_report()
 
-                    elif cb_data == "detailed_report":
-                        answer_callback(cb_id, "מפיק דוח מפורט...")
+                    elif text == "📄 דוח מוצרים מפורט":
                         send_detailed_report()
 
-                    elif cb_data == "times":
-                        answer_callback(cb_id)
-                        edit_telegram(msg_id, "⏰ <b>ניהול זמנים:</b>", time_menu())
+                    elif text == "⏰ ניהול זמנים":
+                        send_telegram("⏰ תפריט ניהול זמנים פתוח במקלדת למטה:", time_menu())
 
-                    elif cb_data == "back_main":
-                        answer_callback(cb_id)
-                        edit_telegram(msg_id, "תפריט ראשי:", main_menu())
+                    elif text == "⬅️ חזרה לתפריט הראשית" or text in ["/start", "תפריט"]:
+                        user_states[chat_id] = None
+                        send_telegram("תפריט ראשי:", main_menu())
 
-                    elif cb_data == "toggle_dashboard":
-                        global dashboard_enabled
+                    elif text.startswith("📊 דשבורד אוטומטי:"):
                         dashboard_enabled = not dashboard_enabled
-                        answer_callback(cb_id, f"הדשבורד {'הופעל 🟢' if dashboard_enabled else 'כובה 🔴'}")
-                        edit_telegram(msg_id, "תפריט ראשי:", main_menu())
+                        status_text = "הופעל 🟢" if dashboard_enabled else "כובה 🔴"
+                        send_telegram(f"הדשבורד האוטומטי {status_text}", main_menu())
 
-                    elif cb_data == "list_times":
-                        times_str = ", ".join(all_times())
-                        answer_callback(cb_id)
-                        send_telegram(f"⏰ <b>זמנים מוגדרים:</b>\n{times_str}")
-
-                    elif cb_data == "add_time":
-                        answer_callback(cb_id)
-                        user_states[chat_id_cb] = "waiting_for_add_time"
+                    # --- כפתורי תפריט הזמנים ---
+                    elif text == "➕ הוסף זמן":
+                        user_states[chat_id] = "waiting_for_add_time"
                         send_telegram("✍️ הקלד זמן להוספה בפורמט HH:MM (למשל: 14:30):")
 
-                    elif cb_data == "delete_time":
-                        answer_callback(cb_id)
-                        user_states[chat_id_cb] = "waiting_for_remove_time"
+                    elif text == "🗑 מחק זמן":
+                        user_states[chat_id] = "waiting_for_remove_time"
                         custom_times = ", ".join(manual_times) if manual_times else "אין זמנים ידניים"
-                        send_telegram(f"🗑 הקלד זמן למחיקה מתוך הרשימה:\n<b>{custom_times}</b>")
+                        send_telegram(f"🗑 הקלד זמן למחיקה מתוך הרשימה הידנית:\n<b>{custom_times}</b>")
+
+                    elif text == "📋 רשימת זמנים":
+                        times_str = ", ".join(all_times())
+                        send_telegram(f"⏰ <b>זמנים מוגדרים:</b>\n{times_str}", time_menu())
 
         except Exception as e:
             print(f"Telegram Handler Exception: {e}")
