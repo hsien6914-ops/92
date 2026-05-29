@@ -13,6 +13,9 @@ import os
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 MY_CHAT_ID = "7811189125"
 
+if not TELEGRAM_TOKEN:
+    raise Exception("Missing TELEGRAM_TOKEN")
+
 ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
 
 SYSTEM_TIMES = ["00:00", "08:00", "08:01", "08:07", "08:11", "08:15"]
@@ -20,13 +23,7 @@ manual_times = []
 user_states = {}
 
 last_status = {}
-
-# 🔥 FIX: changed from set → dict (IMPORTANT FIX ONLY)
 last_sent = {}
-
-# =========================
-# DASHBOARD STATE
-# =========================
 
 dashboard_enabled = True
 dashboard_message_id = None
@@ -60,21 +57,22 @@ def time_menu():
 # =========================
 
 def send_telegram(text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
-    payload = {
-        "chat_id": MY_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-
     try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+        payload = {
+            "chat_id": MY_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+
+        if reply_markup:
+            payload["reply_markup"] = json.dumps(reply_markup)
+
         requests.post(url, json=payload, timeout=10)
-    except:
-        pass
+
+    except Exception as e:
+        print("SEND ERROR:", e)
 
 # =========================
 # STRAUSS API
@@ -85,7 +83,8 @@ def get_all_items():
         with open("strauss_keys.json", "r", encoding="utf-8") as f:
             keys = json.load(f)
 
-        headers = keys["headers"]
+        headers = keys.get("headers", {})
+        headers = headers.copy()
         headers.pop("content-length", None)
         headers.pop("accept-encoding", None)
 
@@ -111,7 +110,7 @@ def get_all_items():
                     r = requests.post(url, headers=headers, json=payload, timeout=10)
 
                     if r.status_code != 200:
-                        break
+                        continue
 
                     body = r.json().get("body", {})
                     items = body.get("gifts") or body.get("items") or []
@@ -130,33 +129,27 @@ def get_all_items():
                         }
 
                 except:
-                    break
+                    continue
 
         return final_inventory
 
-    except:
+    except Exception as e:
+        print("API ERROR:", e)
         return {}
 
 # =========================
-# BUYME FILTER
+# FILTER
 # =========================
 
 def filter_buyme(items):
     return {k: v for k, v in items.items() if "BUY" in k.upper()}
 
 # =========================
-# TIME SYSTEM
+# TIMES
 # =========================
 
 def all_times():
     return sorted(set(SYSTEM_TIMES + manual_times))
-
-def normalize_time(t):
-    try:
-        h, m = t.split(":")
-        return f"{int(h):02d}:{int(m):02d}"
-    except:
-        return None
 
 # =========================
 # DASHBOARD
@@ -177,16 +170,14 @@ def update_dashboard():
 
     now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
 
-    text = f"""
-📊 <b>דשבורד</b>
-
-🔥 BUYME: {len(buyme)}
-📦 סה״כ: {total}
-🟢 במלאי: {in_stock}
-🔴 אזל: {out_stock}
-
-🕒 {now}
-"""
+    text = (
+        f"📊 <b>דשבורד</b>\n\n"
+        f"🔥 BUYME: {len(buyme)}\n"
+        f"📦 סה״כ: {total}\n"
+        f"🟢 במלאי: {in_stock}\n"
+        f"🔴 אזל: {out_stock}\n\n"
+        f"🕒 {now}"
+    )
 
     try:
         if dashboard_message_id:
@@ -197,7 +188,8 @@ def update_dashboard():
                     "message_id": dashboard_message_id,
                     "text": text,
                     "parse_mode": "HTML"
-                }
+                },
+                timeout=10
             )
         else:
             r = requests.post(
@@ -206,15 +198,16 @@ def update_dashboard():
                     "chat_id": MY_CHAT_ID,
                     "text": text,
                     "parse_mode": "HTML"
-                }
+                },
+                timeout=10
             )
-            dashboard_message_id = r.json()["result"]["message_id"]
+            dashboard_message_id = r.json().get("result", {}).get("message_id")
 
     except Exception as e:
         print("DASH ERROR:", e)
 
 # =========================
-# MONITOR (FIXED ONLY HERE)
+# MONITOR LOOP
 # =========================
 
 def monitor():
@@ -225,23 +218,15 @@ def monitor():
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
             today = datetime.now(ISRAEL_TZ).date()
 
-            # =========================
-            # FIXED last_sent LOGIC ONLY
-            # =========================
-
             if now not in all_times():
-                time.sleep(10)
+                time.sleep(5)
                 continue
 
-            if now in last_sent and last_sent[now] == today:
-                time.sleep(10)
+            if last_sent.get(now) == today:
+                time.sleep(5)
                 continue
 
             last_sent[now] = today
-
-            # =========================
-            # BUYME CHECK
-            # =========================
 
             items = get_all_items()
             buyme = filter_buyme(items)
@@ -261,8 +246,7 @@ def monitor():
 
                         last_status[name] = stock
 
-            if dashboard_enabled:
-                update_dashboard()
+            update_dashboard()
 
             time.sleep(5)
 
@@ -271,11 +255,11 @@ def monitor():
             time.sleep(5)
 
 # =========================
-# HANDLER (UNCHANGED)
+# HANDLER
 # =========================
 
 def handle_updates():
-    global dashboard_enabled, dashboard_message_id
+    global dashboard_enabled
 
     last_id = 0
 
@@ -301,7 +285,8 @@ def handle_updates():
                         status = "🟢 מופעל" if dashboard_enabled else "🔴 כבוי"
                         send_telegram(f"דשבורד: {status}", main_menu())
 
-        except:
+        except Exception as e:
+            print("HANDLER ERROR:", e)
             time.sleep(3)
 
 # =========================
