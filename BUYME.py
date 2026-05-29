@@ -9,32 +9,91 @@ import pytz
 # CONFIG
 # =========================
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = "7811189125"
+TELEGRAM_TOKEN = "YOUR_TOKEN"
+MY_CHAT_ID = "7811189125"
 ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
 
-TIMES_FILE = "strauss_keys.json"
-
 SYSTEM_TIMES = ["00:00", "08:00", "08:01", "08:07", "08:11", "08:15"]
-
 manual_times = []
 user_states = {}
 
+last_triggered_time = None
+last_status = {}
+
 # =========================
-# STORAGE
+# STRAUSS SCANNER (שלך)
 # =========================
 
-def load_times():
-    global manual_times
+def get_all_items():
     try:
-        with open(TIMES_FILE, "r") as f:
-            manual_times = json.load(f)
-    except:
-        manual_times = []
+        with open("strauss_keys.json", "r", encoding="utf-8") as f:
+            keys = json.load(f)
 
-def save_times():
-    with open(TIMES_FILE, "w") as f:
-        json.dump(manual_times, f)
+        headers = keys["headers"]
+        headers.pop("content-length", None)
+        headers.pop("accept-encoding", None)
+
+        list_url = "https://cc.strauss-group.com/api/gifts/getGiftsPaginated"
+
+        final_inventory = {}
+        categories = [None, 1000, 1001, 1002, 1003, 1004, 1005]
+
+        for cat in categories:
+            for page in range(0, 5):
+
+                payload = {
+                    "requestPage": page,
+                    "pageSize": 50,
+                    "searchTerm": "",
+                    "subCategoryId": None
+                }
+
+                if cat:
+                    payload["categoryId"] = cat
+
+                try:
+                    res = requests.post(
+                        list_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=10
+                    )
+
+                    if res.status_code != 200:
+                        break
+
+                    body = res.json().get("body", {})
+
+                    items = body.get("gifts") or body.get("items") or []
+
+                    if not items:
+                        break
+
+                    for item in items:
+
+                        title = item.get("title") or item.get("name") or "Unknown"
+                        stock = item.get("stockCount")
+                        points = item.get("points", 0)
+
+                        final_inventory[title] = {
+                            "stock": stock if stock is not None else 0,
+                            "points": points
+                        }
+
+                    time.sleep(0.2)
+
+                except:
+                    break
+
+        return final_inventory
+
+    except Exception as e:
+        print("SCAN ERROR:", e)
+        return {}
+
+# =========================
+# TIMES
+# =========================
 
 def all_times():
     return sorted(set(SYSTEM_TIMES + manual_times))
@@ -43,133 +102,85 @@ def all_times():
 # TELEGRAM
 # =========================
 
-def send(text, markup=None):
+def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-
-    if markup:
-        payload["reply_markup"] = markup
-
-    requests.post(url, json=payload)
+    try:
+        requests.post(url, json={
+            "chat_id": MY_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        }, timeout=10)
+    except:
+        pass
 
 # =========================
-# MOCK API (תחליף לשרת שלך)
+# BUYME FILTER
 # =========================
 
-def get_all_items():
+def filter_buyme(items):
     return {
-        "BUYME 25": {"stock": int(time.time()) % 2, "points": 10},
-        "ארון נעליים": {"stock": 5, "points": 20},
-        "משטח גיימינג": {"stock": 1, "points": 5},
+        k: v for k, v in items.items()
+        if "BUY" in k.upper()
     }
 
 # =========================
-# STATE
+# MONITOR (התראות לפי שעות + שינוי מלאי)
 # =========================
 
-last_buyme_state = None
-sent_times = set()
+def monitor():
+    global last_triggered_time, last_status
 
-# =========================
-# BUYME WATCH (חכם)
-# =========================
-
-def watch_buyme():
-    global last_buyme_state
-
-    while True:
-        try:
-            items = get_all_items()
-            buyme = {t: d for t, d in items.items() if "BUY" in t.upper()}
-
-            has_stock = any(d.get("stock") and d["stock"] > 0 for d in buyme.values())
-
-            # יש מלאי
-            if has_stock:
-                if last_buyme_state != "available":
-                    send("🔥 <b>BUYME זמין!</b>\n🟢 יש מוצרים במלאי")
-                    last_buyme_state = "available"
-
-            # אין מלאי
-            else:
-                if last_buyme_state != "empty":
-                    send("🔴 <b>BUYME אזל!</b>\nאין מוצרים במלאי")
-                    last_buyme_state = "empty"
-
-            time.sleep(30)
-
-        except:
-            time.sleep(5)
-
-# =========================
-# TIME ENGINE
-# =========================
-
-def time_engine():
     while True:
         try:
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
 
             if now in all_times():
-                key = f"{now}-{datetime.now().date()}"
 
-                if key not in sent_times:
-                    sent_times.add(key)
+                if last_triggered_time != now:
+                    last_triggered_time = now
 
                     items = get_all_items()
-                    buyme = {t: d for t, d in items.items() if "BUY" in t.upper()}
+                    buyme = filter_buyme(items)
 
-                    if buyme:
-                        msg = "⏰ <b>התראה מתוזמנת</b>\n━━━━━━━━━━\n"
+                    if not buyme:
+                        send_telegram("🔴 אין BUYME כרגע")
+                        time.sleep(30)
+                        continue
 
-                        for t, d in buyme.items():
-                            status = "🟢 במלאי" if d["stock"] else "🔴 לא במלאי"
-                            msg += f"{t}\n{status}\n━━━━━━━━━━\n"
+                    for name, data in buyme.items():
 
-                        send(msg)
+                        stock = data["stock"]
+                        old = last_status.get(name)
+
+                        if old != stock:
+
+                            if stock > 0:
+                                send_telegram(f"🟢 {name}\nחזר למלאי!")
+                            else:
+                                send_telegram(f"🔴 {name}\nנגמר המלאי")
+
+                            last_status[name] = stock
+
+                        else:
+                            # עדכון סטטוס גם בלי שינוי
+                            if stock > 0:
+                                send_telegram(f"🟢 {name}\nבמלאי")
+                            else:
+                                send_telegram(f"🔴 {name}\nלא במלאי")
 
             time.sleep(20)
 
-        except:
+        except Exception as e:
+            print("MONITOR ERROR:", e)
             time.sleep(5)
 
 # =========================
-# MENU
-# =========================
-
-def menu():
-    send("🤖 <b>דשבורד</b>", {
-        "keyboard": [
-            [{"text": "📊 דוח"}, {"text": "🔍 בדיקה"}],
-            [{"text": "🔥 BUYME"}],
-            [{"text": "⏰ זמנים"}]
-        ],
-        "resize_keyboard": True
-    })
-
-# =========================
-# MOCK HANDLER (פשוט)
-# =========================
-
-def run_bot():
-    menu()
-
-    while True:
-        time.sleep(100)
-
-# =========================
-# START
+# ZONE RUN
 # =========================
 
 if __name__ == "__main__":
-    load_times()
+    threading.Thread(target=monitor, daemon=True).start()
 
-    threading.Thread(target=watch_buyme, daemon=True).start()
-    threading.Thread(target=time_engine, daemon=True).start()
-
-    run_bot()
+    while True:
+        time.sleep(60)
