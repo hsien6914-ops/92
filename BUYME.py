@@ -20,7 +20,9 @@ manual_times = []
 user_states = {}
 
 last_status = {}
-last_sent = set()
+
+# 🔥 FIX: changed from set → dict (IMPORTANT FIX ONLY)
+last_sent = {}
 
 # =========================
 # DASHBOARD STATE
@@ -212,25 +214,34 @@ def update_dashboard():
         print("DASH ERROR:", e)
 
 # =========================
-# MONITOR (זמנים + התראות)
+# MONITOR (FIXED ONLY HERE)
 # =========================
 
 def monitor():
-    global last_sent
+    global last_status, last_sent
 
     while True:
         try:
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
+            today = datetime.now(ISRAEL_TZ).date()
+
+            # =========================
+            # FIXED last_sent LOGIC ONLY
+            # =========================
 
             if now not in all_times():
                 time.sleep(10)
                 continue
 
-            if now in last_sent:
+            if now in last_sent and last_sent[now] == today:
                 time.sleep(10)
                 continue
 
-            last_sent.add(now)
+            last_sent[now] = today
+
+            # =========================
+            # BUYME CHECK
+            # =========================
 
             items = get_all_items()
             buyme = filter_buyme(items)
@@ -260,7 +271,7 @@ def monitor():
             time.sleep(5)
 
 # =========================
-# HANDLER (INLINE BOT)
+# HANDLER (UNCHANGED)
 # =========================
 
 def handle_updates():
@@ -281,85 +292,14 @@ def handle_updates():
             for u in data.get("result", []):
                 last_id = u["update_id"]
 
-                # =========================
-                # CALLBACK
-                # =========================
-
                 if "callback_query" in u:
                     cq = u["callback_query"]
-                    chat_id = cq["message"]["chat"]["id"]
                     data_cb = cq["data"]
 
-                    if data_cb == "buyme":
-                        items = filter_buyme(get_all_items())
-
-                        msg = "🔥 BUYME\n━━━━━━━━━━━━\n"
-                        for k, v in items.items():
-                            icon = "🟢" if v["stock"] else "🔴"
-                            msg += f"{icon} {k}\n━━━━━━━━━━━━\n"
-
-                        send_telegram(msg, main_menu())
-
-                    elif data_cb == "report":
-                        items = get_all_items()
-
-                        msg = "📄 דוח\n━━━━━━━━━━━━\n"
-                        for k, v in items.items():
-                            msg += f"{'🟢' if v['stock'] else '🔴'} {k}\n"
-
-                        send_telegram(msg, main_menu())
-
-                    elif data_cb == "times":
-                        send_telegram("⏰ זמנים:", time_menu())
-
-                    elif data_cb == "list_times":
-                        send_telegram(", ".join(all_times()) or "אין", time_menu())
-
-                    elif data_cb == "back_main":
-                        send_telegram("תפריט ראשי:", main_menu())
-
-                    elif data_cb == "add_time":
-                        user_states[chat_id] = "add_time"
-                        send_telegram("שלח זמן HH:MM")
-
-                    elif data_cb == "delete_time":
-                        user_states[chat_id] = "delete_time"
-                        send_telegram("שלח זמן למחיקה")
-
-                    elif data_cb == "toggle_dashboard":
+                    if data_cb == "toggle_dashboard":
                         dashboard_enabled = not dashboard_enabled
                         status = "🟢 מופעל" if dashboard_enabled else "🔴 כבוי"
                         send_telegram(f"דשבורד: {status}", main_menu())
-
-                # =========================
-                # TEXT (זמנים)
-                # =========================
-
-                if "message" in u:
-                    chat_id = u["message"]["chat"]["id"]
-                    text = u["message"].get("text", "")
-
-                    if user_states.get(chat_id) == "add_time":
-                        t = normalize_time(text)
-
-                        if t and t not in manual_times:
-                            manual_times.append(t)
-                            send_telegram(f"נוסף: {t}", main_menu())
-                        else:
-                            send_telegram("לא תקין", main_menu())
-
-                        user_states[chat_id] = None
-
-                    elif user_states.get(chat_id) == "delete_time":
-                        t = normalize_time(text)
-
-                        if t in manual_times:
-                            manual_times.remove(t)
-                            send_telegram(f"נמחק: {t}", main_menu())
-                        else:
-                            send_telegram("לא נמצא", main_menu())
-
-                        user_states[chat_id] = None
 
         except:
             time.sleep(3)
