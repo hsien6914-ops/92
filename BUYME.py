@@ -23,6 +23,13 @@ last_status = {}
 last_sent = set()
 
 # =========================
+# DASHBOARD STATE
+# =========================
+
+dashboard_enabled = True
+dashboard_message_id = None
+
+# =========================
 # INLINE MENU
 # =========================
 
@@ -32,7 +39,7 @@ def main_menu():
             [{"text": "🔥 BUYME", "callback_data": "buyme"}],
             [{"text": "📄 דוח", "callback_data": "report"}],
             [{"text": "⏰ זמנים", "callback_data": "times"}],
-            [{"text": "📊 דשבורד", "callback_data": "dashboard"}]
+            [{"text": "📊 דשבורד ON/OFF", "callback_data": "toggle_dashboard"}]
         ]
     }
 
@@ -150,25 +157,87 @@ def normalize_time(t):
         return None
 
 # =========================
-# MONITOR (ALERTS)
+# DASHBOARD
+# =========================
+
+def update_dashboard():
+    global dashboard_message_id
+
+    if not dashboard_enabled:
+        return
+
+    items = get_all_items()
+    buyme = filter_buyme(items)
+
+    total = len(items)
+    in_stock = sum(1 for v in items.values() if v["stock"])
+    out_stock = total - in_stock
+
+    now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
+
+    text = f"""
+📊 <b>דשבורד</b>
+
+🔥 BUYME: {len(buyme)}
+📦 סה״כ: {total}
+🟢 במלאי: {in_stock}
+🔴 אזל: {out_stock}
+
+🕒 {now}
+"""
+
+    try:
+        if dashboard_message_id:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
+                json={
+                    "chat_id": MY_CHAT_ID,
+                    "message_id": dashboard_message_id,
+                    "text": text,
+                    "parse_mode": "HTML"
+                }
+            )
+        else:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={
+                    "chat_id": MY_CHAT_ID,
+                    "text": text,
+                    "parse_mode": "HTML"
+                }
+            )
+            dashboard_message_id = r.json()["result"]["message_id"]
+
+    except Exception as e:
+        print("DASH ERROR:", e)
+
+# =========================
+# MONITOR (זמנים + התראות)
 # =========================
 
 def monitor():
+    global last_sent
+
     while True:
         try:
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
 
-            if now in all_times() and now not in last_sent:
-                last_sent.add(now)
+            if now not in all_times():
+                time.sleep(10)
+                continue
 
-                items = get_all_items()
-                buyme = filter_buyme(items)
+            if now in last_sent:
+                time.sleep(10)
+                continue
 
-                if not buyme:
-                    send_telegram("🔴 אין BUYME כרגע")
-                    time.sleep(5)
-                    continue
+            last_sent.add(now)
 
+            items = get_all_items()
+            buyme = filter_buyme(items)
+
+            if not buyme:
+                send_telegram("🔴 אין BUYME כרגע")
+            else:
                 for name, data in buyme.items():
                     stock = data["stock"]
                     old = last_status.get(name)
@@ -181,8 +250,8 @@ def monitor():
 
                         last_status[name] = stock
 
-            if len(last_sent) > 200:
-                last_sent.clear()
+            if dashboard_enabled:
+                update_dashboard()
 
             time.sleep(5)
 
@@ -191,10 +260,12 @@ def monitor():
             time.sleep(5)
 
 # =========================
-# HANDLER (INLINE CALLBACKS)
+# HANDLER (INLINE BOT)
 # =========================
 
 def handle_updates():
+    global dashboard_enabled, dashboard_message_id
+
     last_id = 0
 
     while True:
@@ -211,7 +282,7 @@ def handle_updates():
                 last_id = u["update_id"]
 
                 # =========================
-                # CALLBACK BUTTONS
+                # CALLBACK
                 # =========================
 
                 if "callback_query" in u:
@@ -219,40 +290,30 @@ def handle_updates():
                     chat_id = cq["message"]["chat"]["id"]
                     data_cb = cq["data"]
 
-                    if data_cb == "dashboard":
-                        send_telegram("📊 מערכת פעילה ✔", main_menu())
-
-                    elif data_cb == "buyme":
+                    if data_cb == "buyme":
                         items = filter_buyme(get_all_items())
 
-                        if not items:
-                            send_telegram("אין BUYME", main_menu())
-                        else:
-                            msg = "🔥 BUYME\n━━━━━━━━━━━━\n"
+                        msg = "🔥 BUYME\n━━━━━━━━━━━━\n"
+                        for k, v in items.items():
+                            icon = "🟢" if v["stock"] else "🔴"
+                            msg += f"{icon} {k}\n━━━━━━━━━━━━\n"
 
-                            for k, v in items.items():
-                                icon = "🟢" if v["stock"] else "🔴"
-                                msg += f"{icon} {k}\n━━━━━━━━━━━━\n"
-
-                            send_telegram(msg, main_menu())
+                        send_telegram(msg, main_menu())
 
                     elif data_cb == "report":
                         items = get_all_items()
 
-                        msg = "📄 דוח מלאי\n━━━━━━━━━━━━\n"
+                        msg = "📄 דוח\n━━━━━━━━━━━━\n"
                         for k, v in items.items():
                             msg += f"{'🟢' if v['stock'] else '🔴'} {k}\n"
 
                         send_telegram(msg, main_menu())
 
                     elif data_cb == "times":
-                        send_telegram("⏰ ניהול זמנים:", time_menu())
+                        send_telegram("⏰ זמנים:", time_menu())
 
                     elif data_cb == "list_times":
-                        send_telegram(
-                            "⏰ זמנים:\n" + (", ".join(all_times()) or "אין"),
-                            time_menu()
-                        )
+                        send_telegram(", ".join(all_times()) or "אין", time_menu())
 
                     elif data_cb == "back_main":
                         send_telegram("תפריט ראשי:", main_menu())
@@ -265,8 +326,13 @@ def handle_updates():
                         user_states[chat_id] = "delete_time"
                         send_telegram("שלח זמן למחיקה")
 
+                    elif data_cb == "toggle_dashboard":
+                        dashboard_enabled = not dashboard_enabled
+                        status = "🟢 מופעל" if dashboard_enabled else "🔴 כבוי"
+                        send_telegram(f"דשבורד: {status}", main_menu())
+
                 # =========================
-                # TEXT INPUT (זמנים)
+                # TEXT (זמנים)
                 # =========================
 
                 if "message" in u:
@@ -278,9 +344,9 @@ def handle_updates():
 
                         if t and t not in manual_times:
                             manual_times.append(t)
-                            send_telegram(f"נוסף זמן: {t}", main_menu())
+                            send_telegram(f"נוסף: {t}", main_menu())
                         else:
-                            send_telegram("לא תקין או קיים", main_menu())
+                            send_telegram("לא תקין", main_menu())
 
                         user_states[chat_id] = None
 
