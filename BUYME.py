@@ -237,7 +237,7 @@ def monitor():
                         else:
                             send_telegram(f"🔴 <b>{name}</b>\nנגמר המלאי")
 
-                        last_status[name] = stock
+                    last_status[name] = stock
 
             update_dashboard()
             time.sleep(5)
@@ -277,7 +277,7 @@ def handle_updates():
             time.sleep(3)
 
 # =========================
-# 🔥 FIX FOR RENDER (ONLY ADDITION)
+# WEB SERVER FOR RENDER
 # =========================
 
 app = Flask(__name__)
@@ -295,6 +295,9 @@ def run_web():
 # =========================
 
 if __name__ == "__main__":
+    # הרצת תהליכי הרקע של הבוט
     threading.Thread(target=monitor, daemon=True).start()
     threading.Thread(target=handle_updates, daemon=True).start()
+    
+    # הרצת השרת עבור Render על התהליך הראשי
     run_web()
