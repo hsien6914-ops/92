@@ -19,27 +19,35 @@ SYSTEM_TIMES = ["00:00", "08:00", "08:01", "08:07", "08:11", "08:15"]
 manual_times = []
 user_states = {}
 
-last_triggered_time = None
 last_status = {}
+last_sent = set()
 
 # =========================
-# MENU (מעודכן)
+# INLINE MENU
 # =========================
 
 def main_menu():
     return {
-        "keyboard": [
-            [{"text": "📊 דשבורד"}],
-            [{"text": "📄 דוח"}],
-            [{"text": "🔥 BUYME"}],
-            [{"text": "⏰ זמנים"}, {"text": "⚙️ הגדרות"}],
-            [{"text": "➕ הוסף זמן"}, {"text": "🗑 מחק זמן"}]
-        ],
-        "resize_keyboard": True
+        "inline_keyboard": [
+            [{"text": "🔥 BUYME", "callback_data": "buyme"}],
+            [{"text": "📄 דוח", "callback_data": "report"}],
+            [{"text": "⏰ זמנים", "callback_data": "times"}],
+            [{"text": "📊 דשבורד", "callback_data": "dashboard"}]
+        ]
+    }
+
+def time_menu():
+    return {
+        "inline_keyboard": [
+            [{"text": "➕ הוסף זמן", "callback_data": "add_time"}],
+            [{"text": "🗑 מחק זמן", "callback_data": "delete_time"}],
+            [{"text": "📋 רשימה", "callback_data": "list_times"}],
+            [{"text": "⬅️ חזרה", "callback_data": "back_main"}]
+        ]
     }
 
 # =========================
-# TELEGRAM SEND
+# SEND MESSAGE
 # =========================
 
 def send_telegram(text, reply_markup=None):
@@ -60,7 +68,7 @@ def send_telegram(text, reply_markup=None):
         pass
 
 # =========================
-# STRAUSS API (לא נגעתי)
+# STRAUSS API
 # =========================
 
 def get_all_items():
@@ -128,7 +136,7 @@ def filter_buyme(items):
     return {k: v for k, v in items.items() if "BUY" in k.upper()}
 
 # =========================
-# TIMES SYSTEM (משודרג)
+# TIME SYSTEM
 # =========================
 
 def all_times():
@@ -142,12 +150,10 @@ def normalize_time(t):
         return None
 
 # =========================
-# MONITOR (תיקון יציב)
+# MONITOR (ALERTS)
 # =========================
 
 def monitor():
-    last_sent = set()
-
     while True:
         try:
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
@@ -185,7 +191,7 @@ def monitor():
             time.sleep(5)
 
 # =========================
-# HANDLER (רגיל + שדרוג זמנים)
+# HANDLER (INLINE CALLBACKS)
 # =========================
 
 def handle_updates():
@@ -204,83 +210,90 @@ def handle_updates():
             for u in data.get("result", []):
                 last_id = u["update_id"]
 
-                if "message" not in u:
-                    continue
-
-                chat_id = u["message"]["chat"]["id"]
-                text = u["message"].get("text", "")
-
                 # =========================
-                # DASHBOARD / REPORT (לא נגעתי)
+                # CALLBACK BUTTONS
                 # =========================
 
-                if text == "📊 דשבורד":
-                    send_telegram("📊 מערכת פעילה ✔", main_menu())
+                if "callback_query" in u:
+                    cq = u["callback_query"]
+                    chat_id = cq["message"]["chat"]["id"]
+                    data_cb = cq["data"]
 
-                elif text == "📄 דוח":
-                    items = get_all_items()
+                    if data_cb == "dashboard":
+                        send_telegram("📊 מערכת פעילה ✔", main_menu())
 
-                    msg = "📄 <b>דוח מלאי</b>\n━━━━━━━━━━━━\n"
-                    for k, v in items.items():
-                        msg += f"{'🟢' if v['stock'] else '🔴'} {k}\n"
+                    elif data_cb == "buyme":
+                        items = filter_buyme(get_all_items())
 
-                    send_telegram(msg, main_menu())
+                        if not items:
+                            send_telegram("אין BUYME", main_menu())
+                        else:
+                            msg = "🔥 BUYME\n━━━━━━━━━━━━\n"
 
-                elif text == "🔥 BUYME":
-                    items = filter_buyme(get_all_items())
+                            for k, v in items.items():
+                                icon = "🟢" if v["stock"] else "🔴"
+                                msg += f"{icon} {k}\n━━━━━━━━━━━━\n"
 
-                    if not items:
-                        send_telegram("אין BUYME", main_menu())
-                    else:
-                        msg = "🔥 BUYME\n━━━━━━━━━━━━\n"
+                            send_telegram(msg, main_menu())
+
+                    elif data_cb == "report":
+                        items = get_all_items()
+
+                        msg = "📄 דוח מלאי\n━━━━━━━━━━━━\n"
                         for k, v in items.items():
-                            icon = "🟢" if v["stock"] else "🔴"
-                            msg += f"{icon} {k}\n📦 {'במלאי' if v['stock'] else 'לא במלאי'} | ⭐ {v['points']}\n━━━━━━━━━━━━\n"
+                            msg += f"{'🟢' if v['stock'] else '🔴'} {k}\n"
 
                         send_telegram(msg, main_menu())
 
-                # =========================
-                # זמנים
-                # =========================
+                    elif data_cb == "times":
+                        send_telegram("⏰ ניהול זמנים:", time_menu())
 
-                elif text == "⏰ זמנים":
-                    send_telegram(
-                        "⏰ זמנים:\n" + (", ".join(all_times()) or "אין"),
-                        main_menu()
-                    )
+                    elif data_cb == "list_times":
+                        send_telegram(
+                            "⏰ זמנים:\n" + (", ".join(all_times()) or "אין"),
+                            time_menu()
+                        )
 
-                elif text == "➕ הוסף זמן":
-                    user_states[chat_id] = "add_time"
-                    send_telegram("שלח זמן HH:MM")
+                    elif data_cb == "back_main":
+                        send_telegram("תפריט ראשי:", main_menu())
 
-                elif text == "🗑 מחק זמן":
-                    if not manual_times:
-                        send_telegram("אין זמנים למחיקה", main_menu())
-                    else:
-                        send_telegram("בחר זמן למחיקה:\n\n" + "\n".join(manual_times))
+                    elif data_cb == "add_time":
+                        user_states[chat_id] = "add_time"
+                        send_telegram("שלח זמן HH:MM")
+
+                    elif data_cb == "delete_time":
                         user_states[chat_id] = "delete_time"
+                        send_telegram("שלח זמן למחיקה")
 
-                elif user_states.get(chat_id) == "add_time":
-                    t = normalize_time(text)
+                # =========================
+                # TEXT INPUT (זמנים)
+                # =========================
 
-                    if t and t not in manual_times:
-                        manual_times.append(t)
-                        send_telegram(f"נוסף זמן: {t}", main_menu())
-                    else:
-                        send_telegram("לא תקין או כבר קיים", main_menu())
+                if "message" in u:
+                    chat_id = u["message"]["chat"]["id"]
+                    text = u["message"].get("text", "")
 
-                    user_states[chat_id] = None
+                    if user_states.get(chat_id) == "add_time":
+                        t = normalize_time(text)
 
-                elif user_states.get(chat_id) == "delete_time":
-                    t = normalize_time(text)
+                        if t and t not in manual_times:
+                            manual_times.append(t)
+                            send_telegram(f"נוסף זמן: {t}", main_menu())
+                        else:
+                            send_telegram("לא תקין או קיים", main_menu())
 
-                    if t in manual_times:
-                        manual_times.remove(t)
-                        send_telegram(f"נמחק זמן: {t}", main_menu())
-                    else:
-                        send_telegram("לא נמצא", main_menu())
+                        user_states[chat_id] = None
 
-                    user_states[chat_id] = None
+                    elif user_states.get(chat_id) == "delete_time":
+                        t = normalize_time(text)
+
+                        if t in manual_times:
+                            manual_times.remove(t)
+                            send_telegram(f"נמחק: {t}", main_menu())
+                        else:
+                            send_telegram("לא נמצא", main_menu())
+
+                        user_states[chat_id] = None
 
         except:
             time.sleep(3)
