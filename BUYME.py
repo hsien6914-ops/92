@@ -55,6 +55,9 @@ def time_menu():
 # =========================
 
 def send_telegram(text, reply_markup=None):
+    if not TELEGRAM_TOKEN:
+        print("WARNING: TELEGRAM_TOKEN environment variable is missing!")
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": MY_CHAT_ID, "text": text, "parse_mode": "HTML"}
     if reply_markup:
@@ -65,6 +68,8 @@ def send_telegram(text, reply_markup=None):
         print(f"Error sending message: {e}")
 
 def edit_telegram(message_id, text, reply_markup=None):
+    if not TELEGRAM_TOKEN:
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
     payload = {"chat_id": MY_CHAT_ID, "message_id": message_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
@@ -75,6 +80,8 @@ def edit_telegram(message_id, text, reply_markup=None):
         print(f"Error editing message: {e}")
 
 def answer_callback(callback_id, text=""):
+    if not TELEGRAM_TOKEN:
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
     payload = {"callback_query_id": callback_id, "text": text}
     try:
@@ -89,7 +96,7 @@ def answer_callback(callback_id, text=""):
 def get_all_items():
     try:
         if not os.path.exists("strauss_keys.json"):
-            print("ERROR: strauss_keys.json not found!")
+            print("WARNING: strauss_keys.json not found in current directory!")
             return {}
 
         with open("strauss_keys.json", "r", encoding="utf-8") as f:
@@ -134,7 +141,7 @@ def get_all_items():
                     break
         return final_inventory
     except Exception as e:
-        print(f"API Error: {e}")
+        print(f"API General Error: {e}")
         return {}
 
 def filter_buyme(items):
@@ -190,29 +197,31 @@ def check_buyme_now():
 
 def monitor_stock():
     global last_status
+    print("Background Thread: Stock monitor initialized.")
     while True:
         try:
             items = get_all_items()
-            buyme = filter_buyme(items)
+            if items:
+                buyme = filter_buyme(items)
+                for name, data in buyme.items():
+                    current_stock = data["stock"]
+                    old_stock = last_status.get(name)
 
-            for name, data in buyme.items():
-                current_stock = data["stock"]
-                old_stock = last_status.get(name)
+                    if old_stock is not None and old_stock != current_stock:
+                        if current_stock > 0 and old_stock == 0:
+                            send_telegram(f"🟢 <b>{name}</b>\nחזר למלאי! 🎉 ({current_stock} זמינים)")
+                        elif current_stock == 0 and old_stock > 0:
+                            send_telegram(f"🔴 <b>{name}</b>\nאזל מהמלאי.")
 
-                if old_stock is not None and old_stock != current_stock:
-                    if current_stock > 0 and old_stock == 0:
-                        send_telegram(f"🟢 <b>{name}</b>\nחזר למלאי! 🎉 ({current_stock} זמינים)")
-                    elif current_stock == 0 and old_stock > 0:
-                        send_telegram(f"🔴 <b>{name}</b>\nאזל מהמלאי.")
-
-                last_status[name] = current_stock
-
+                    last_status[name] = current_stock
             time.sleep(60)
         except Exception as e:
+            print(f"Monitor stock exception: {e}")
             time.sleep(60)
 
 def monitor_schedules():
     global last_sent_dashboard
+    print("Background Thread: Schedule monitor initialized.")
     while True:
         try:
             if not dashboard_enabled:
@@ -220,4 +229,154 @@ def monitor_schedules():
                 continue
 
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
-            today = datetime.now(ISRAEL_TZ).date
+            today = datetime.now(ISRAEL_TZ).date()
+
+            if now in all_times():
+                if last_sent_dashboard.get(now) != today:
+                    send_dashboard_report()
+                    last_sent_dashboard[now] = today
+            time.sleep(30)
+        except Exception as e:
+            print(f"Monitor schedules exception: {e}")
+            time.sleep(30)
+
+# =========================
+# TELEGRAM BOT HANDLER
+# =========================
+
+def handle_updates():
+    last_id = 0
+    print("Background Thread: Telegram updater initialized.")
+    
+    # הודעת בדיקה ראשונית
+    send_telegram("🚀 הבוט הופעל בהצלחה בשרת הענן!\nשלח /start לפתיחת התפריט.")
+
+    while True:
+        try:
+            if not TELEGRAM_TOKEN:
+                time.sleep(10)
+                continue
+                
+            r = requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+                params={"offset": last_id + 1, "timeout": 20},
+                timeout=30
+            )
+            if r.status_code != 200:
+                time.sleep(5)
+                continue
+                
+            data = r.json()
+
+            for u in data.get("result", []):
+                last_id = u["update_id"]
+
+                # 1. הודעות טקסט
+                if "message" in u and "text" in u["message"]:
+                    text = u["message"]["text"].strip()
+                    chat_id = str(u["message"]["chat"]["id"])
+                    state = user_states.get(chat_id)
+
+                    if state == "waiting_for_add_time":
+                        if len(text) == 5 and ":" in text:
+                            if text not in manual_times and text not in SYSTEM_TIMES:
+                                manual_times.append(text)
+                                send_telegram(f"✅ הזמן <b>{text}</b> נוסף בהצלחה!")
+                            else:
+                                send_telegram(f"⚠️ הזמן {text} כבר קיים.")
+                        else:
+                            send_telegram("❌ פורמט שגוי. יש להקליד כגון 14:30")
+                        user_states[chat_id] = None
+                        send_telegram("תפריט זמנים:", time_menu())
+
+                    elif state == "waiting_for_remove_time":
+                        if text in manual_times:
+                            manual_times.remove(text)
+                            send_telegram(f"✅ הזמן <b>{text}</b> הוסר!")
+                        else:
+                            send_telegram("❌ הזמן לא נמצא ברשימה הידנית.")
+                        user_states[chat_id] = None
+                        send_telegram("תפריט זמנים:", time_menu())
+
+                    elif text in ["/start", "תפריט"]:
+                        user_states[chat_id] = None
+                        send_telegram("ברוך הבא למערכת הבקרה! בחר אפשרות:", main_menu())
+
+                # 2. לחיצות כפתורים
+                elif "callback_query" in u:
+                    cq = u["callback_query"]
+                    cb_data = cq["data"]
+                    cb_id = cq["id"]
+                    msg_id = cq["message"]["message_id"]
+                    chat_id_cb = str(cq["message"]["chat"]["id"])
+
+                    if cb_data == "check_buyme":
+                        answer_callback(cb_id, "בודק מלאי...")
+                        send_telegram(check_buyme_now())
+
+                    elif cb_data == "report":
+                        answer_callback(cb_id, "מפיק דוח...")
+                        send_dashboard_report()
+
+                    elif cb_data == "times":
+                        answer_callback(cb_id)
+                        edit_telegram(msg_id, "⏰ <b>ניהול זמנים:</b>", time_menu())
+
+                    elif cb_data == "back_main":
+                        answer_callback(cb_id)
+                        edit_telegram(msg_id, "תפריט ראשי:", main_menu())
+
+                    elif cb_data == "toggle_dashboard":
+                        global dashboard_enabled
+                        dashboard_enabled = not dashboard_enabled
+                        answer_callback(cb_id, f"הדשבורד {'הופעל 🟢' if dashboard_enabled else 'כובה 🔴'}")
+                        edit_telegram(msg_id, "תפריט ראשי:", main_menu())
+
+                    elif cb_data == "list_times":
+                        times_str = ", ".join(all_times())
+                        answer_callback(cb_id)
+                        send_telegram(f"⏰ <b>זמנים מוגדרים:</b>\n{times_str}")
+
+                    elif cb_data == "add_time":
+                        answer_callback(cb_id)
+                        user_states[chat_id_cb] = "waiting_for_add_time"
+                        send_telegram("✍️ הקלד זמן להוספה בפורמט HH:MM (למשל: 14:30):")
+
+                    elif cb_data == "delete_time":
+                        answer_callback(cb_id)
+                        user_states[chat_id_cb] = "waiting_for_remove_time"
+                        custom_times = ", ".join(manual_times) if manual_times else "אין זמנים ידניים"
+                        send_telegram(f"🗑 הקלד זמן למחיקה מתוך הרשימה:\n<b>{custom_times}</b>")
+
+        except Exception as e:
+            print(f"Telegram Handler Exception: {e}")
+            time.sleep(5)
+
+# =========================
+# WEB SERVER FOR RENDER
+# =========================
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "BOT IS RUNNING WELL!"
+
+def start_bot_threads():
+    # פונקציה שמפעילה את תהליכי הרקע רק לאחר שהשרת המרכזי כבר מאזין
+    print("Starting background threads...")
+    threading.Thread(target=monitor_stock, daemon=True).start()
+    threading.Thread(target=monitor_schedules, daemon=True).start()
+    threading.Thread(target=handle_updates, daemon=True).start()
+
+# =========================
+# START
+# =========================
+
+if __name__ == "__main__":
+    # שימוש בטיימר קצר כדי להפעיל את תהליכי הבוט מיד לאחר ש-Flask עולה
+    threading.Timer(2.0, start_bot_threads).start()
+    
+    port = int(os.environ.get("PORT", 10000))
+    print(f"Starting Flask web server on port {port}...")
+    app.run(host="0.0.0.0", port=port)
