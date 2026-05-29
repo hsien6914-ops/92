@@ -1,4 +1,3 @@
-requests
-fpdf
-pytz
 Flask
+requests
+pytz
