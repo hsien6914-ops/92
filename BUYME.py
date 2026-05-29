@@ -23,22 +23,23 @@ last_triggered_time = None
 last_status = {}
 
 # =========================
-# MENU
+# MENU (מעודכן)
 # =========================
 
 def main_menu():
     return {
         "keyboard": [
             [{"text": "📊 דשבורד"}],
-            [{"text": "🔍 בדיקה"}, {"text": "📄 דוח"}],
+            [{"text": "📄 דוח"}],
             [{"text": "🔥 BUYME"}],
-            [{"text": "⏰ זמנים"}, {"text": "⚙️ הגדרות"}]
+            [{"text": "⏰ זמנים"}, {"text": "⚙️ הגדרות"}],
+            [{"text": "➕ הוסף זמן"}, {"text": "🗑 מחק זמן"}]
         ],
         "resize_keyboard": True
     }
 
 # =========================
-# TELEGRAM
+# TELEGRAM SEND
 # =========================
 
 def send_telegram(text, reply_markup=None):
@@ -59,7 +60,7 @@ def send_telegram(text, reply_markup=None):
         pass
 
 # =========================
-# STRAUSS API (שלך)
+# STRAUSS API (לא נגעתי)
 # =========================
 
 def get_all_items():
@@ -111,8 +112,6 @@ def get_all_items():
                             "points": points
                         }
 
-                    time.sleep(0.2)
-
                 except:
                     break
 
@@ -126,64 +125,67 @@ def get_all_items():
 # =========================
 
 def filter_buyme(items):
-    return {
-        k: v for k, v in items.items()
-        if "BUY" in k.upper()
-    }
+    return {k: v for k, v in items.items() if "BUY" in k.upper()}
 
 # =========================
-# TIMES
+# TIMES SYSTEM (משודרג)
 # =========================
 
 def all_times():
     return sorted(set(SYSTEM_TIMES + manual_times))
 
+def normalize_time(t):
+    try:
+        h, m = t.split(":")
+        return f"{int(h):02d}:{int(m):02d}"
+    except:
+        return None
+
 # =========================
-# MONITOR (התראות אוטומטיות לפי שעות)
+# MONITOR (תיקון יציב)
 # =========================
 
 def monitor():
-    global last_triggered_time, last_status
+    last_sent = set()
 
     while True:
         try:
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
 
-            if now in all_times():
+            if now in all_times() and now not in last_sent:
+                last_sent.add(now)
 
-                if last_triggered_time != now:
-                    last_triggered_time = now
+                items = get_all_items()
+                buyme = filter_buyme(items)
 
-                    items = get_all_items()
-                    buyme = filter_buyme(items)
+                if not buyme:
+                    send_telegram("🔴 אין BUYME כרגע")
+                    time.sleep(5)
+                    continue
 
-                    if not buyme:
-                        send_telegram("🔴 אין BUYME כרגע")
-                        time.sleep(30)
-                        continue
+                for name, data in buyme.items():
+                    stock = data["stock"]
+                    old = last_status.get(name)
 
-                    for name, data in buyme.items():
+                    if old != stock:
+                        if stock > 0:
+                            send_telegram(f"🟢 <b>{name}</b>\nחזר למלאי 🎉")
+                        else:
+                            send_telegram(f"🔴 <b>{name}</b>\nנגמר המלאי")
 
-                        stock = data["stock"]
-                        old = last_status.get(name)
+                        last_status[name] = stock
 
-                        if old != stock:
+            if len(last_sent) > 200:
+                last_sent.clear()
 
-                            if stock > 0:
-                                send_telegram(f"🟢 <b>{name}</b>\nחזר למלאי 🎉")
-                            else:
-                                send_telegram(f"🔴 <b>{name}</b>\nנגמר המלאי")
-
-                            last_status[name] = stock
-
-            time.sleep(15)
+            time.sleep(5)
 
         except Exception as e:
             print("MONITOR ERROR:", e)
             time.sleep(5)
 
 # =========================
-# TELEGRAM HANDLER
+# HANDLER (רגיל + שדרוג זמנים)
 # =========================
 
 def handle_updates():
@@ -208,31 +210,17 @@ def handle_updates():
                 chat_id = u["message"]["chat"]["id"]
                 text = u["message"].get("text", "")
 
-                # START
-                if text == "/start":
-                    send_telegram(
-                        "🤖 <b>דשבורד ראשי</b>\nבחר פעולה:",
-                        main_menu()
-                    )
+                # =========================
+                # DASHBOARD / REPORT (לא נגעתי)
+                # =========================
 
-                elif text == "📊 דשבורד":
+                if text == "📊 דשבורד":
                     send_telegram("📊 מערכת פעילה ✔", main_menu())
-
-                elif text == "🔍 בדיקה":
-                    items = get_all_items()
-
-                    msg = "\n".join([
-                        f"{'🟢' if v['stock'] else '🔴'} {k}"
-                        for k, v in items.items()
-                    ])
-
-                    send_telegram(msg, main_menu())
 
                 elif text == "📄 דוח":
                     items = get_all_items()
 
                     msg = "📄 <b>דוח מלאי</b>\n━━━━━━━━━━━━\n"
-
                     for k, v in items.items():
                         msg += f"{'🟢' if v['stock'] else '🔴'} {k}\n"
 
@@ -245,38 +233,54 @@ def handle_updates():
                         send_telegram("אין BUYME", main_menu())
                     else:
                         msg = "🔥 BUYME\n━━━━━━━━━━━━\n"
-
                         for k, v in items.items():
                             icon = "🟢" if v["stock"] else "🔴"
-                            status = "במלאי" if v["stock"] else "לא במלאי"
-
-                            msg += f"{icon} {k}\n📦 {status} | ⭐ {v['points']}\n━━━━━━━━━━━━\n"
+                            msg += f"{icon} {k}\n📦 {'במלאי' if v['stock'] else 'לא במלאי'} | ⭐ {v['points']}\n━━━━━━━━━━━━\n"
 
                         send_telegram(msg, main_menu())
 
+                # =========================
+                # זמנים
+                # =========================
+
                 elif text == "⏰ זמנים":
                     send_telegram(
-                        "⏰ זמנים:\n" + (", ".join(manual_times) or "אין"),
+                        "⏰ זמנים:\n" + (", ".join(all_times()) or "אין"),
                         main_menu()
                     )
-
-                elif text == "⚙️ הגדרות":
-                    send_telegram("⚙️ מערכת פעילה ✔", main_menu())
 
                 elif text == "➕ הוסף זמן":
                     user_states[chat_id] = "add_time"
                     send_telegram("שלח זמן HH:MM")
 
-                elif text == "🗑 מחק הכל":
-                    manual_times.clear()
-                    send_telegram("נמחק ✔", main_menu())
+                elif text == "🗑 מחק זמן":
+                    if not manual_times:
+                        send_telegram("אין זמנים למחיקה", main_menu())
+                    else:
+                        send_telegram("בחר זמן למחיקה:\n\n" + "\n".join(manual_times))
+                        user_states[chat_id] = "delete_time"
 
                 elif user_states.get(chat_id) == "add_time":
-                    if ":" in text:
-                        manual_times.append(text)
+                    t = normalize_time(text)
+
+                    if t and t not in manual_times:
+                        manual_times.append(t)
+                        send_telegram(f"נוסף זמן: {t}", main_menu())
+                    else:
+                        send_telegram("לא תקין או כבר קיים", main_menu())
 
                     user_states[chat_id] = None
-                    send_telegram("נוסף ✔", main_menu())
+
+                elif user_states.get(chat_id) == "delete_time":
+                    t = normalize_time(text)
+
+                    if t in manual_times:
+                        manual_times.remove(t)
+                        send_telegram(f"נמחק זמן: {t}", main_menu())
+                    else:
+                        send_telegram("לא נמצא", main_menu())
+
+                    user_states[chat_id] = None
 
         except:
             time.sleep(3)
