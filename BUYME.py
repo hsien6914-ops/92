@@ -5,6 +5,7 @@ import threading
 from datetime import datetime
 import pytz
 import os
+from flask import Flask
 
 # =========================
 # CONFIG
@@ -12,9 +13,6 @@ import os
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 MY_CHAT_ID = "7811189125"
-
-if not TELEGRAM_TOKEN:
-    raise Exception("Missing TELEGRAM_TOKEN")
 
 ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
 
@@ -57,22 +55,21 @@ def time_menu():
 # =========================
 
 def send_telegram(text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    payload = {
+        "chat_id": MY_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
-        payload = {
-            "chat_id": MY_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
-        }
-
-        if reply_markup:
-            payload["reply_markup"] = json.dumps(reply_markup)
-
         requests.post(url, json=payload, timeout=10)
-
-    except Exception as e:
-        print("SEND ERROR:", e)
+    except:
+        pass
 
 # =========================
 # STRAUSS API
@@ -83,8 +80,7 @@ def get_all_items():
         with open("strauss_keys.json", "r", encoding="utf-8") as f:
             keys = json.load(f)
 
-        headers = keys.get("headers", {})
-        headers = headers.copy()
+        headers = keys["headers"]
         headers.pop("content-length", None)
         headers.pop("accept-encoding", None)
 
@@ -110,7 +106,7 @@ def get_all_items():
                     r = requests.post(url, headers=headers, json=payload, timeout=10)
 
                     if r.status_code != 200:
-                        continue
+                        break
 
                     body = r.json().get("body", {})
                     items = body.get("gifts") or body.get("items") or []
@@ -129,12 +125,11 @@ def get_all_items():
                         }
 
                 except:
-                    continue
+                    break
 
         return final_inventory
 
-    except Exception as e:
-        print("API ERROR:", e)
+    except:
         return {}
 
 # =========================
@@ -143,10 +138,6 @@ def get_all_items():
 
 def filter_buyme(items):
     return {k: v for k, v in items.items() if "BUY" in k.upper()}
-
-# =========================
-# TIMES
-# =========================
 
 def all_times():
     return sorted(set(SYSTEM_TIMES + manual_times))
@@ -170,14 +161,16 @@ def update_dashboard():
 
     now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
 
-    text = (
-        f"📊 <b>דשבורד</b>\n\n"
-        f"🔥 BUYME: {len(buyme)}\n"
-        f"📦 סה״כ: {total}\n"
-        f"🟢 במלאי: {in_stock}\n"
-        f"🔴 אזל: {out_stock}\n\n"
-        f"🕒 {now}"
-    )
+    text = f"""
+📊 <b>דשבורד</b>
+
+🔥 BUYME: {len(buyme)}
+📦 סה״כ: {total}
+🟢 במלאי: {in_stock}
+🔴 אזל: {out_stock}
+
+🕒 {now}
+"""
 
     try:
         if dashboard_message_id:
@@ -201,17 +194,17 @@ def update_dashboard():
                 },
                 timeout=10
             )
-            dashboard_message_id = r.json().get("result", {}).get("message_id")
+            dashboard_message_id = r.json()["result"]["message_id"]
 
-    except Exception as e:
-        print("DASH ERROR:", e)
+    except:
+        pass
 
 # =========================
-# MONITOR LOOP
+# MONITOR
 # =========================
 
 def monitor():
-    global last_status, last_sent
+    global last_sent, last_status
 
     while True:
         try:
@@ -247,11 +240,9 @@ def monitor():
                         last_status[name] = stock
 
             update_dashboard()
-
             time.sleep(5)
 
-        except Exception as e:
-            print("MONITOR ERROR:", e)
+        except:
             time.sleep(5)
 
 # =========================
@@ -259,8 +250,6 @@ def monitor():
 # =========================
 
 def handle_updates():
-    global dashboard_enabled
-
     last_id = 0
 
     while True:
@@ -281,13 +270,25 @@ def handle_updates():
                     data_cb = cq["data"]
 
                     if data_cb == "toggle_dashboard":
+                        global dashboard_enabled
                         dashboard_enabled = not dashboard_enabled
-                        status = "🟢 מופעל" if dashboard_enabled else "🔴 כבוי"
-                        send_telegram(f"דשבורד: {status}", main_menu())
 
-        except Exception as e:
-            print("HANDLER ERROR:", e)
+        except:
             time.sleep(3)
+
+# =========================
+# 🔥 FIX FOR RENDER (ONLY ADDITION)
+# =========================
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "BOT IS RUNNING"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 # =========================
 # START
@@ -295,4 +296,5 @@ def handle_updates():
 
 if __name__ == "__main__":
     threading.Thread(target=monitor, daemon=True).start()
-    handle_updates()
+    threading.Thread(target=handle_updates, daemon=True).start()
+    run_web()
