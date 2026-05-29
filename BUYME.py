@@ -1,373 +1,385 @@
-import requests
-import json
+#!/usr/bin/env python
+# coding: utf-8
+
+import os
+import random
 import time
 import threading
-from datetime import datetime
-import pytz
-import os
+import requests
+import logging
 
-# =========================
+from flask import Flask
+from telebot import TeleBot
+from aliexpress_api import AliexpressApi, models
+from deep_translator import GoogleTranslator
+
+# ==========================================
+# LOGS
+# ==========================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
+# ==========================================
 # CONFIG
-# =========================
+# ==========================================
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-MY_CHAT_ID = "7811189125"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHANNEL_ID = os.environ.get("CHANNEL_ID")
 
-ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
+ALI_APP_ID = os.environ.get("ALI_APP_ID")
+ALI_APP_SECRET = os.environ.get("ALI_SECRET")
 
-SYSTEM_TIMES = ["00:00", "08:00", "08:01", "08:07", "08:11", "08:15"]
-manual_times = []
-user_states = {}
+URL_RENDER = "https://ase-574b.onrender.com"
+PORT = int(os.environ.get("PORT", 10000))
 
-last_status = {}
-last_sent = set()
+SEND_INTERVAL = 600
+BOT_START_TIME = time.time()
 
-# =========================
-# DASHBOARD STATE
-# =========================
+JSONBIN_URL = "https://api.jsonbin.io/v3/b/6a15e64c5e02c046e3196e71"
 
-dashboard_enabled = True
-dashboard_message_id = None
+HEADERS = {
+    'X-Master-Key': "$2a$10$MyiqOwUKfW/CrW9W59aL7OxMhumTrKj9bcsl3PCMPtgMEFHnr1T8q"
+}
 
-# =========================
-# INLINE MENU
-# =========================
+if not BOT_TOKEN or not CHANNEL_ID:
+    raise Exception("Missing BOT_TOKEN or CHANNEL_ID")
 
-def main_menu():
-    return {
-        "inline_keyboard": [
-            [{"text": "🔥 BUYME", "callback_data": "buyme"}],
-            [{"text": "📄 דוח", "callback_data": "report"}],
-            [{"text": "⏰ זמנים", "callback_data": "times"}],
-            [{"text": "📊 דשבורד ON/OFF", "callback_data": "toggle_dashboard"}]
-        ]
-    }
+# ==========================================
+# APP
+# ==========================================
 
-def time_menu():
-    return {
-        "inline_keyboard": [
-            [{"text": "➕ הוסף זמן", "callback_data": "add_time"}],
-            [{"text": "🗑 מחק זמן", "callback_data": "delete_time"}],
-            [{"text": "📋 רשימה", "callback_data": "list_times"}],
-            [{"text": "⬅️ חזרה", "callback_data": "back_main"}]
-        ]
-    }
+app = Flask(__name__)
+bot = TeleBot(BOT_TOKEN)
 
-# =========================
-# SEND MESSAGE
-# =========================
+aliexpress = AliexpressApi(
+    ALI_APP_ID,
+    ALI_APP_SECRET,
+    models.Language.EN,
+    models.Currency.USD,
+    'default'
+)
 
-def send_telegram(text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+# ==========================================
+# KEYWORDS (לא נגעתי)
+# ==========================================
 
-    payload = {
-        "chat_id": MY_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }
+KEYWORDS = [
+    "Gadget",
+    "Smart Home",
+    "Tool",
+    "Kitchen",
+    "Tech",
+    "Gaming",
+    "DIY",
+    "Electronics",
+    "Innovation",
+    "Wireless Charger",
+    "Bluetooth Speaker",
+    "Smart Watch",
+    "Power Bank",
+    "Mini Drone",
+    "Projector",
+    "Robot Vacuum",
+    "Action Camera",
+    "Headphones",
+    "Portable Printer",
+    "WiFi Camera",
+    "Smart Bulb",
+    "Smart Plug",
+    "Security System",
+    "Smart Lock",
+    "Humidifier",
+    "Air Purifier",
+    "Coffee Maker",
+    "Blender",
+    "Electric Kettle",
+    "Kitchen Organizer",
+    "Electric Drill",
+    "Hand Tools",
+    "Laser Level",
+    "Multitool",
+    "Dash Cam",
+    "Car Charger",
+    "Mechanical Keyboard",
+    "Gaming Mouse",
+    "LED Strip",
+    "Tripod",
+    "Ring Light",
+    "Massage Gun",
+    "Electric Toothbrush",
+    "Fitness Tracker",
+    "Camping Gear",
+    "Travel Accessory",
+    "Smart Ring",
+    "Electric Shaver",
+    "USB Hub",
+    "Cable Organizer",
+    "Phone Stand",
+    "Laptop Stand",
+    "Mini Fan",
+    "Solar Power",
+    "Security Alarm",
+    "Home Decor",
+    "Desk Lamp",
+    "Webcam",
+    "Microphone"
+]
 
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
+# ==========================================
+# TEMPLATES (לא נגעתי)
+# ==========================================
 
+TEMPLATES = [
+    (
+        "<b>🔥 רק {round_ils} שקל 😱</b>\n"
+        "{title}\n"
+        "<b>📦 מספר הזמנות:</b> {orders}+\n"
+        "<b>⭐ דירוג מוצר:</b> {rating}\n"
+        "<b>💸 מחיר הנחות:</b> ₪{ils_price} ({usd_price}$)\n"
+        "<b>👇 לרכישה מעליאקספרס 👇</b>\n"
+        "{affiliate_link}\n\n"
+        "{hashtags}"
+    ),
+
+    (
+        "<b>💥 רק {round_ils} שקל 😱 דיל מטורף!</b>\n"
+        "{title}\n"
+        "<b>📦 מספר הזמנות:</b> {orders}+\n"
+        "<b>⭐ דירוג מוצר:</b> {rating}\n"
+        "<b>💸 מחיר הנחות:</b> ₪{ils_price} ({usd_price}$)\n"
+        "<b>👇 לרכישה מעליאקספרס 👇</b>\n"
+        "{affiliate_link}\n\n"
+        "{hashtags}"
+    ),
+
+    (
+        "<b>🔥 מחיר פגז רק {round_ils} שקל 🔥</b>\n"
+        "{title}\n"
+        "<b>📦 מספר הזמנות:</b> {orders}+\n"
+        "<b>⭐ דירוג מוצר:</b> {rating}\n"
+        "<b>💸 מחיר הנחות:</b> ₪{ils_price} ({usd_price}$)\n"
+        "<b>👇 לרכישה מעליאקספרס 👇</b>\n"
+        "{affiliate_link}\n\n"
+        "{hashtags}"
+    )
+]
+
+# ==========================================
+# SCORE
+# ==========================================
+
+def score_product(volume, rating, price):
+    score = 0
     try:
-        requests.post(url, json=payload, timeout=10)
+        score += float(volume or 0) * 0.6
     except:
         pass
 
-# =========================
-# STRAUSS API
-# =========================
-
-def get_all_items():
     try:
-        with open("strauss_keys.json", "r", encoding="utf-8") as f:
-            keys = json.load(f)
-
-        headers = keys["headers"]
-        headers.pop("content-length", None)
-        headers.pop("accept-encoding", None)
-
-        url = "https://cc.strauss-group.com/api/gifts/getGiftsPaginated"
-
-        final_inventory = {}
-        categories = [None, 1000, 1001, 1002, 1003, 1004, 1005]
-
-        for cat in categories:
-            for page in range(0, 5):
-
-                payload = {
-                    "requestPage": page,
-                    "pageSize": 50,
-                    "searchTerm": "",
-                    "subCategoryId": None
-                }
-
-                if cat:
-                    payload["categoryId"] = cat
-
-                try:
-                    r = requests.post(url, headers=headers, json=payload, timeout=10)
-
-                    if r.status_code != 200:
-                        break
-
-                    body = r.json().get("body", {})
-                    items = body.get("gifts") or body.get("items") or []
-
-                    if not items:
-                        break
-
-                    for item in items:
-                        title = item.get("title") or item.get("name") or "Unknown"
-                        stock = item.get("stockCount") or 0
-                        points = item.get("points", 0)
-
-                        final_inventory[title] = {
-                            "stock": stock,
-                            "points": points
-                        }
-
-                except:
-                    break
-
-        return final_inventory
-
+        score += float(rating or 0) * 20
     except:
-        return {}
+        pass
 
-# =========================
-# BUYME FILTER
-# =========================
-
-def filter_buyme(items):
-    return {k: v for k, v in items.items() if "BUY" in k.upper()}
-
-# =========================
-# TIME SYSTEM
-# =========================
-
-def all_times():
-    return sorted(set(SYSTEM_TIMES + manual_times))
-
-def normalize_time(t):
     try:
-        h, m = t.split(":")
-        return f"{int(h):02d}:{int(m):02d}"
+        if price < 20:
+            score += 30
+        elif price < 50:
+            score += 15
+        elif price < 100:
+            score += 5
     except:
-        return None
+        pass
 
-# =========================
+    return score
+
+# ==========================================
+# KEEP ALIVE
+# ==========================================
+
+def keep_alive():
+    while True:
+        try:
+            requests.get(URL_RENDER, timeout=10)
+        except:
+            pass
+        time.sleep(240)
+
+# ==========================================
+# JSONBIN SAFE (מתוקן קריסות)
+# ==========================================
+
+def get_sent():
+    try:
+        r = requests.get(JSONBIN_URL, headers=HEADERS, timeout=10).json()
+        return set(r.get("record", {}).get("sent", []))
+    except:
+        return set()
+
+def save_sent(name):
+    try:
+        sent = list(get_sent())
+        sent.append(name)
+
+        requests.put(
+            JSONBIN_URL,
+            json={"sent": sent[-500:]},
+            headers={"Content-Type": "application/json", **HEADERS},
+            timeout=10
+        )
+    except:
+        pass
+
+# ==========================================
 # DASHBOARD
-# =========================
+# ==========================================
 
-def update_dashboard():
-    global dashboard_message_id
+@bot.message_handler(commands=['4'])
+def dashboard(message):
+    uptime = int(time.time() - BOT_START_TIME)
+    h = uptime // 3600
+    m = (uptime % 3600) // 60
 
-    if not dashboard_enabled:
-        return
+    text = (
+        "🤖 <b>דשבורד בוט</b>\n\n"
+        f"⏱ זמן פעילות: {h}h {m}m\n"
+        f"📦 מוצרים שנשלחו: {len(get_sent())}\n"
+        "✔️ פעיל"
+    )
 
-    items = get_all_items()
-    buyme = filter_buyme(items)
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-    total = len(items)
-    in_stock = sum(1 for v in items.values() if v["stock"])
-    out_stock = total - in_stock
+# ==========================================
+# GET PRODUCT (מתוקן קריסות בלבד)
+# ==========================================
 
-    now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
-
-    text = f"""
-📊 <b>דשבורד</b>
-
-🔥 BUYME: {len(buyme)}
-📦 סה״כ: {total}
-🟢 במלאי: {in_stock}
-🔴 אזל: {out_stock}
-
-🕒 {now}
-"""
-
+def get_product():
     try:
-        if dashboard_message_id:
-            requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
-                json={
-                    "chat_id": MY_CHAT_ID,
-                    "message_id": dashboard_message_id,
-                    "text": text,
-                    "parse_mode": "HTML"
-                }
-            )
-        else:
-            r = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json={
-                    "chat_id": MY_CHAT_ID,
-                    "text": text,
-                    "parse_mode": "HTML"
-                }
-            )
-            dashboard_message_id = r.json()["result"]["message_id"]
+        resp = aliexpress.get_products(
+            keywords=random.choice(KEYWORDS),
+            page_size=30,
+            sort="LAST_VOLUME_DESC"
+        )
+
+        sent = get_sent()
+
+        best = None
+        best_score = 0
+
+        for p in resp.products:
+            try:
+                if not p.product_title:
+                    continue
+
+                price = float(p.target_sale_price or 0)
+                if price <= 0:
+                    continue
+
+                title = p.product_title[:60]
+
+                if title in sent:
+                    continue
+
+                score = score_product(
+                    getattr(p, "lastest_volume", 0),
+                    getattr(p, "evaluate_rate", 0),
+                    price
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best = p
+
+            except:
+                continue
+
+        if not best:
+            return None
+
+        try:
+            title = GoogleTranslator(source='auto', target='iw').translate(best.product_title[:60])
+        except:
+            title = best.product_title[:60]
+
+        usd = float(best.target_sale_price)
+        ils = round(usd * 3.3)
+        ils_price = f"{ils}.90"
+
+        try:
+            aff = aliexpress.get_affiliate_links(best.product_detail_url)[0].promotion_link
+        except:
+            aff = best.product_detail_url
+
+        save_sent(title)
+
+        template = random.choice(TEMPLATES)
+
+        caption = template.format(
+            round_ils=ils,
+            title=title,
+            orders=getattr(best, "lastest_volume", 0),
+            rating=getattr(best, "evaluate_rate", 0),
+            ils_price=ils_price,
+            usd_price=round(usd, 2),
+            affiliate_link=aff,
+            hashtags="#AliExpress #דילים #מבצעים"
+        )
+
+        return caption, best.product_main_image_url
 
     except Exception as e:
-        print("DASH ERROR:", e)
+        print("GET PRODUCT ERROR:", e)
+        return None
 
-# =========================
-# MONITOR (זמנים + התראות)
-# =========================
+# ==========================================
+# LOOP
+# ==========================================
 
-def monitor():
-    global last_sent
-
+def auto_loop():
     while True:
         try:
-            now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
+            data = get_product()
 
-            if now not in all_times():
-                time.sleep(10)
-                continue
-
-            if now in last_sent:
-                time.sleep(10)
-                continue
-
-            last_sent.add(now)
-
-            items = get_all_items()
-            buyme = filter_buyme(items)
-
-            if not buyme:
-                send_telegram("🔴 אין BUYME כרגע")
+            if data:
+                bot.send_photo(
+                    CHANNEL_ID,
+                    data[1],
+                    caption=data[0],
+                    parse_mode="HTML"
+                )
+                print("PRODUCT SENT")
             else:
-                for name, data in buyme.items():
-                    stock = data["stock"]
-                    old = last_status.get(name)
-
-                    if old != stock:
-                        if stock > 0:
-                            send_telegram(f"🟢 <b>{name}</b>\nחזר למלאי 🎉")
-                        else:
-                            send_telegram(f"🔴 <b>{name}</b>\nנגמר המלאי")
-
-                        last_status[name] = stock
-
-            if dashboard_enabled:
-                update_dashboard()
-
-            time.sleep(5)
+                print("NO PRODUCT FOUND")
 
         except Exception as e:
-            print("MONITOR ERROR:", e)
-            time.sleep(5)
+            print("SEND ERROR:", e)
 
-# =========================
-# HANDLER (INLINE BOT)
-# =========================
+        time.sleep(SEND_INTERVAL)
 
-def handle_updates():
-    global dashboard_enabled, dashboard_message_id
+# ==========================================
+# HOME
+# ==========================================
 
-    last_id = 0
+@app.route("/")
+def home():
+    return "Bot is running!"
 
-    while True:
-        try:
-            r = requests.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-                params={"offset": last_id + 1, "timeout": 20},
-                timeout=30
-            )
-
-            data = r.json()
-
-            for u in data.get("result", []):
-                last_id = u["update_id"]
-
-                # =========================
-                # CALLBACK
-                # =========================
-
-                if "callback_query" in u:
-                    cq = u["callback_query"]
-                    chat_id = cq["message"]["chat"]["id"]
-                    data_cb = cq["data"]
-
-                    if data_cb == "buyme":
-                        items = filter_buyme(get_all_items())
-
-                        msg = "🔥 BUYME\n━━━━━━━━━━━━\n"
-                        for k, v in items.items():
-                            icon = "🟢" if v["stock"] else "🔴"
-                            msg += f"{icon} {k}\n━━━━━━━━━━━━\n"
-
-                        send_telegram(msg, main_menu())
-
-                    elif data_cb == "report":
-                        items = get_all_items()
-
-                        msg = "📄 דוח\n━━━━━━━━━━━━\n"
-                        for k, v in items.items():
-                            msg += f"{'🟢' if v['stock'] else '🔴'} {k}\n"
-
-                        send_telegram(msg, main_menu())
-
-                    elif data_cb == "times":
-                        send_telegram("⏰ זמנים:", time_menu())
-
-                    elif data_cb == "list_times":
-                        send_telegram(", ".join(all_times()) or "אין", time_menu())
-
-                    elif data_cb == "back_main":
-                        send_telegram("תפריט ראשי:", main_menu())
-
-                    elif data_cb == "add_time":
-                        user_states[chat_id] = "add_time"
-                        send_telegram("שלח זמן HH:MM")
-
-                    elif data_cb == "delete_time":
-                        user_states[chat_id] = "delete_time"
-                        send_telegram("שלח זמן למחיקה")
-
-                    elif data_cb == "toggle_dashboard":
-                        dashboard_enabled = not dashboard_enabled
-                        status = "🟢 מופעל" if dashboard_enabled else "🔴 כבוי"
-                        send_telegram(f"דשבורד: {status}", main_menu())
-
-                # =========================
-                # TEXT (זמנים)
-                # =========================
-
-                if "message" in u:
-                    chat_id = u["message"]["chat"]["id"]
-                    text = u["message"].get("text", "")
-
-                    if user_states.get(chat_id) == "add_time":
-                        t = normalize_time(text)
-
-                        if t and t not in manual_times:
-                            manual_times.append(t)
-                            send_telegram(f"נוסף: {t}", main_menu())
-                        else:
-                            send_telegram("לא תקין", main_menu())
-
-                        user_states[chat_id] = None
-
-                    elif user_states.get(chat_id) == "delete_time":
-                        t = normalize_time(text)
-
-                        if t in manual_times:
-                            manual_times.remove(t)
-                            send_telegram(f"נמחק: {t}", main_menu())
-                        else:
-                            send_telegram("לא נמצא", main_menu())
-
-                        user_states[chat_id] = None
-
-        except:
-            time.sleep(3)
-
-# =========================
-# START
-# =========================
+# ==========================================
+# MAIN
+# ==========================================
 
 if __name__ == "__main__":
-    threading.Thread(target=monitor, daemon=True).start()
-    handle_updates()
+    threading.Thread(target=keep_alive, daemon=True).start()
+    threading.Thread(target=auto_loop, daemon=True).start()
+
+    threading.Thread(
+        target=lambda: app.run(host="0.0.0.0", port=PORT),
+        daemon=True
+    ).start()
+
+    bot.infinity_polling(skip_pending=True)
