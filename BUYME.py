@@ -19,7 +19,7 @@ ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
 # זמנים לשליחת דוח/דשבורד אוטומטי
 SYSTEM_TIMES = ["00:00", "08:00", "08:01", "08:07", "08:11", "08:15"]
 manual_times = []
-user_states = {} # מילון ששומר את המצב של המשתמש (למשל: ממתין להכנסת זמן)
+user_states = {}
 
 last_status = {}
 last_sent_dashboard = {}
@@ -220,33 +220,4 @@ def monitor_schedules():
                 continue
 
             now = datetime.now(ISRAEL_TZ).strftime("%H:%M")
-            today = datetime.now(ISRAEL_TZ).date()
-
-            if now in all_times():
-                if last_sent_dashboard.get(now) != today:
-                    send_dashboard_report()
-                    last_sent_dashboard[now] = today
-
-            time.sleep(30)
-        except Exception as e:
-            time.sleep(30)
-
-# =========================
-# TELEGRAM BOT HANDLER
-# =========================
-
-def handle_updates():
-    last_id = 0
-    send_telegram("🚀 הבוט הופעל מחדש וזמין לפעולה!\nשלח /start כדי לפתוח את התפריט.")
-
-    while True:
-        try:
-            r = requests.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-                params={"offset": last_id + 1, "timeout": 20},
-                timeout=30
-            )
-            data = r.json()
-
-            for u in data.get("result", []):
-                last_id = u["update_
+            today = datetime.now(ISRAEL_TZ).date
