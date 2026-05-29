@@ -34,7 +34,7 @@ def main_menu():
     return {
         "inline_keyboard": [
             [{"text": "🔥 בדוק BUYME עכשיו", "callback_data": "check_buyme"}],
-            [{"text": "📄 דוח מלאי", "callback_data": "report"}],
+            [{"text": "📊 דוח מספרי קצר", "callback_data": "report"}, {"text": "📄 דוח מוצרים מפורט", "callback_data": "detailed_report"}],
             [{"text": "⏰ ניהול זמנים", "callback_data": "times"}],
             [{"text": f"📊 דשבורד אוטומטי: {'ON 🟢' if dashboard_enabled else 'OFF 🔴'}", "callback_data": "toggle_dashboard"}]
         ]
@@ -175,6 +175,61 @@ def send_dashboard_report():
     
     send_telegram(text)
 
+def send_detailed_report():
+    items = get_all_items()
+    if not items:
+        send_telegram("⚠️ שגיאה בשליפת נתונים (אולי חסר קובץ מפתחות?)")
+        return
+
+    buyme_items = filter_buyme(items)
+    
+    in_stock = []
+    out_of_stock = []
+    
+    for name, data in items.items():
+        if "BUY" in name.upper():
+            continue
+        if data["stock"] > 0:
+            in_stock.append(f"• {name} ({data['stock']} יח')")
+        else:
+            out_of_stock.append(f"• {name}")
+
+    now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
+
+    text = f"📊 <b>דוח מוצרים מפורט</b>\n"
+    text += f"🕒 נכון לשעה: {now}\n"
+    text += f"───────────────────\n\n"
+
+    text += f"🔥 <b>פריטי BUYME במערכת:</b>\n"
+    if buyme_items:
+        for name, data in buyme_items.items():
+            status_icon = "🟢" if data["stock"] > 0 else "🔴"
+            text += f"{status_icon} {name} (מלאי: {data['stock']})\n"
+    else:
+        text += "לא נמצאו פריטי BUYME.\n"
+        
+    text += f"\n───────────────────\n\n"
+
+    text += f"🟢 <b>מוצרים במלאי ({len(in_stock)} פריטים):</b>\n"
+    if in_stock:
+        text += "\n".join(in_stock[:40])
+        if len(in_stock) > 40:
+            text += f"\n... ועוד {len(in_stock) - 40} פריטים במלאי."
+    else:
+        text += "אין פריטים במלאי.\n"
+
+    text += f"\n\n───────────────────\n\n"
+
+    text += f"🔴 <b>מוצרים שאזלו מהמלאי ({len(out_of_stock)} פריטים):</b>\n"
+    if out_of_stock:
+        text += "\n".join(out_of_stock[:40])
+        if len(out_of_stock) > 40:
+            text += f"\n... ועוד {len(out_of_stock) - 40} פריטים שאזלו."
+    else:
+        text += "אין פריטים שאזלו.\n"
+
+    send_telegram(text)
+
 def check_buyme_now():
     items = get_all_items()
     buyme = filter_buyme(items)
@@ -247,8 +302,6 @@ def monitor_schedules():
 def handle_updates():
     last_id = 0
     print("Background Thread: Telegram updater initialized.")
-    
-    # הודעת בדיקה ראשונית
     send_telegram("🚀 הבוט הופעל בהצלחה בשרת הענן!\nשלח /start לפתיחת התפריט.")
 
     while True:
@@ -315,8 +368,12 @@ def handle_updates():
                         send_telegram(check_buyme_now())
 
                     elif cb_data == "report":
-                        answer_callback(cb_id, "מפיק דוח...")
+                        answer_callback(cb_id, "מפיק דוח קצר...")
                         send_dashboard_report()
+
+                    elif cb_data == "detailed_report":
+                        answer_callback(cb_id, "מפיק דוח מפורט...")
+                        send_detailed_report()
 
                     elif cb_data == "times":
                         answer_callback(cb_id)
@@ -363,7 +420,6 @@ def home():
     return "BOT IS RUNNING WELL!"
 
 def start_bot_threads():
-    # פונקציה שמפעילה את תהליכי הרקע רק לאחר שהשרת המרכזי כבר מאזין
     print("Starting background threads...")
     threading.Thread(target=monitor_stock, daemon=True).start()
     threading.Thread(target=monitor_schedules, daemon=True).start()
@@ -374,7 +430,6 @@ def start_bot_threads():
 # =========================
 
 if __name__ == "__main__":
-    # שימוש בטיימר קצר כדי להפעיל את תהליכי הבוט מיד לאחר ש-Flask עולה
     threading.Timer(2.0, start_bot_threads).start()
     
     port = int(os.environ.get("PORT", 10000))
