@@ -26,6 +26,9 @@ last_sent_dashboard = {}
 
 dashboard_enabled = True
 
+# מילות מפתח למעקב מיוחד (BUYME + TERMINAL X)
+TRACKED_KEYWORDS = ["BUY", "TERMINAL"]
+
 # =========================
 # MENUS (REPLY KEYBOARD)
 # =========================
@@ -33,7 +36,7 @@ dashboard_enabled = True
 def main_menu():
     return {
         "keyboard": [
-            [{"text": "🔥 בדוק BUYME עכשיו"}],
+            [{"text": "🔥 בדוק BUYME ו-TERMINAL X עכשיו"}],
             [{"text": "📊 דוח מספרי קצר"}, {"text": "📄 דוח מוצרים מפורט"}],
             [{"text": "⏰ ניהול זמנים"}],
             [{"text": f"📊 דשבורד אוטומטי: {'ON 🟢' if dashboard_enabled else 'OFF 🔴'}"}]
@@ -47,7 +50,7 @@ def time_menu():
         "keyboard": [
             [{"text": "➕ הוסף זמן"}, {"text": "🗑 מחק זמן"}],
             [{"text": "📋 רשימת זמנים"}],
-            [{"text": "⬅️ חזרה לתפריט הראשית"}]
+            [{"text": "⬅️ חזרה לתפריט הראשי"}]
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False
@@ -118,15 +121,21 @@ def get_all_items():
                         stock = item.get("stockCount") or 0
                         points = item.get("points", 0)
                         final_inventory[title] = {"stock": stock, "points": points}
-                except:
+                except Exception:
                     break
         return final_inventory
     except Exception as e:
         print(f"API General Error: {e}")
         return {}
 
-def filter_buyme(items):
-    return {k: v for k, v in items.items() if "BUY" in k.upper()}
+def is_tracked_item(name):
+    """בודק אם המוצר הוא שובר מבוקש (BUYME או TERMINAL X)"""
+    upper_name = name.upper()
+    return any(keyword in upper_name for keyword in TRACKED_KEYWORDS)
+
+def filter_tracked(items):
+    """מחזיר רק את הפריטים המבוקשים מתוך כלל המוצרים"""
+    return {k: v for k, v in items.items() if is_tracked_item(k)}
 
 def all_times():
     return sorted(set(SYSTEM_TIMES + manual_times))
@@ -141,14 +150,17 @@ def send_dashboard_report():
         send_telegram("⚠️ שגיאה בשליפת נתונים (אולי חסר קובץ מפתחות?)")
         return
 
-    buyme = filter_buyme(items)
+    buyme_count = sum(1 for k in items if "BUY" in k.upper())
+    terminal_count = sum(1 for k in items if "TERMINAL" in k.upper())
+    
     total = len(items)
     in_stock = sum(1 for v in items.values() if v["stock"] > 0)
     out_stock = total - in_stock
     now = datetime.now(ISRAEL_TZ).strftime("%H:%M:%S")
 
     text = f"📊 <b>דוח מצב מלאי</b>\n\n"
-    text += f"🔥 BUYME במערכת: {len(buyme)}\n"
+    text += f"🔥 BUYME במערכת: {buyme_count}\n"
+    text += f"🛍 TERMINAL X במערכת: {terminal_count}\n"
     text += f"📦 סה״כ פריטים: {total}\n"
     text += f"🟢 במלאי: {in_stock}\n"
     text += f"🔴 אזל: {out_stock}\n\n"
@@ -162,13 +174,13 @@ def send_detailed_report():
         send_telegram("⚠️ שגיאה בשליפת נתונים (אולי חסר קובץ מפתחות?)")
         return
 
-    buyme_items = filter_buyme(items)
+    tracked_items = filter_tracked(items)
     
     in_stock = []
     out_of_stock = []
     
     for name, data in items.items():
-        if "BUY" in name.upper():
+        if is_tracked_item(name):
             continue
         if data["stock"] > 0:
             in_stock.append(f"• {name} ({data['stock']} יח')")
@@ -181,17 +193,17 @@ def send_detailed_report():
     text += f"🕒 נכון לשעה: {now}\n"
     text += f"───────────────────\n\n"
 
-    text += f"🔥 <b>פריטי BUYME במערכת:</b>\n"
-    if buyme_items:
-        for name, data in buyme_items.items():
+    text += f"🔥 <b>פריטי BUYME ו-TERMINAL X במערכת:</b>\n"
+    if tracked_items:
+        for name, data in tracked_items.items():
             status_icon = "🟢" if data["stock"] > 0 else "🔴"
             text += f"{status_icon} {name} (מלאי: {data['stock']})\n"
     else:
-        text += "לא נמצאו פריטי BUYME.\n"
+        text += "לא נמצאו פריטי BUYME או TERMINAL X.\n"
         
     text += f"\n───────────────────\n\n"
 
-    text += f"🟢 <b>מוצרים במלאי ({len(in_stock)} פריטים):</b>\n"
+    text += f"🟢 <b>שאר המוצרים במלאי ({len(in_stock)} פריטים):</b>\n"
     if in_stock:
         text += "\n".join(in_stock[:40])
         if len(in_stock) > 40:
@@ -201,7 +213,7 @@ def send_detailed_report():
 
     text += f"\n\n───────────────────\n\n"
 
-    text += f"🔴 <b>מוצרים שאזלו מהמלאי ({len(out_of_stock)} פריטים):</b>\n"
+    text += f"🔴 <b>שאר המוצרים שאזלו ({len(out_of_stock)} פריטים):</b>\n"
     if out_of_stock:
         text += "\n".join(out_of_stock[:40])
         if len(out_of_stock) > 40:
@@ -211,18 +223,18 @@ def send_detailed_report():
 
     send_telegram(text)
 
-def check_buyme_now():
+def check_tracked_now():
     items = get_all_items()
-    buyme = filter_buyme(items)
+    tracked = filter_tracked(items)
     
-    if not buyme:
-        return "לא נמצאו פריטי BUYME במערכת כרגע."
+    if not tracked:
+        return "לא נמצאו פריטי BUYME או TERMINAL X במערכת כרגע."
     
-    in_stock = {k: v for k, v in buyme.items() if v["stock"] > 0}
+    in_stock = {k: v for k, v in tracked.items() if v["stock"] > 0}
     if not in_stock:
-        return "🔴 כל פריטי ה-BUYME אזלו מהמלאי."
+        return "🔴 כל פריטי ה-BUYME וה-TERMINAL X אזלו מהמלאי."
     
-    text = "🟢 <b>פריטי BUYME זמינים עכשיו:</b>\n\n"
+    text = "🟢 <b>שוברים מבוקשים זמינים עכשיו:</b>\n\n"
     for name, data in in_stock.items():
         text += f"• {name} ({data['stock']} במלאי)\n"
     return text
@@ -238,8 +250,8 @@ def monitor_stock():
         try:
             items = get_all_items()
             if items:
-                buyme = filter_buyme(items)
-                for name, data in buyme.items():
+                tracked = filter_tracked(items)
+                for name, data in tracked.items():
                     current_stock = data["stock"]
                     old_stock = last_status.get(name)
 
@@ -284,7 +296,7 @@ def handle_updates():
     last_id = 0
     global dashboard_enabled
     print("Background Thread: Telegram updater initialized.")
-    send_telegram("🚀 הבוט הופעל בהצלחה בענן! המקלדת זמינה למטה בתחתית המסך.", main_menu())
+    send_telegram("🚀 הבוט הופעל בהצלחה בענן! עוקב אחרי BUYME ו-TERMINAL X.", main_menu())
 
     while True:
         try:
@@ -336,8 +348,8 @@ def handle_updates():
                         continue
 
                     # --- טיפול בכפתורי המקלדת הראשיים ---
-                    if text == "🔥 בדוק BUYME עכשיו":
-                        send_telegram(check_buyme_now(), main_menu())
+                    if text in ["🔥 בדוק BUYME ו-TERMINAL X עכשיו", "🔥 בדוק BUYME עכשיו"]:
+                        send_telegram(check_tracked_now(), main_menu())
 
                     elif text == "📊 דוח מספרי קצר":
                         send_dashboard_report()
@@ -348,7 +360,7 @@ def handle_updates():
                     elif text == "⏰ ניהול זמנים":
                         send_telegram("⏰ תפריט ניהול זמנים פתוח במקלדת למטה:", time_menu())
 
-                    elif text == "⬅️ חזרה לתפריט הראשית" or text in ["/start", "תפריט"]:
+                    elif text in ["⬅️ חזרה לתפריט הראשי", "⬅️ חזרה לתפריט הראשית", "/start", "תפריט"]:
                         user_states[chat_id] = None
                         send_telegram("תפריט ראשי:", main_menu())
 
