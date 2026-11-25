@@ -12,7 +12,7 @@ from flask import Flask
 # =========================
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-MY_CHAT_ID = "7811189125"
+MY_CHAT_ID = "9117707312"
 
 ISRAEL_TZ = pytz.timezone("Asia/Jerusalem")
 
